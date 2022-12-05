@@ -1,7 +1,7 @@
 {
     "config": {
         "abort": {
-            "single_instance_allowed": "Bereits konfiguriert. Es ist nur eine Konfiguration m\u00f6glich."
+            "single_instance_allowed": "Bereits konfiguriert. Nur eine einzige Konfiguration m\u00f6glich."
         },
         "error": {
             "invalid_known_hosts": "Bekannte Hosts m\u00fcssen eine durch Kommata getrennte Liste von Hosts sein."
@@ -12,7 +12,7 @@
                     "known_hosts": "Bekannte Hosts"
                 },
                 "description": "Bekannte Hosts - Eine durch Kommas getrennte Liste von Hostnamen oder IP-Adressen von Cast-Ger\u00e4ten, die verwendet wird, wenn die mDNS-Erkennung nicht funktioniert.",
-                "title": "Google Cast-Konfiguration"
+                "title": "Google Cast Konfiguration"
             },
             "confirm": {
                 "description": "M\u00f6chtest Du mit der Einrichtung beginnen?"

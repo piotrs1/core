@@ -11,11 +11,12 @@
                 "data": {
                     "password": "Password"
                 },
-                "description": "Autenticazione non riuscita per OVO Energy. Immettere le credenziali correnti.",
-                "title": "Riautenticazione"
+                "description": "Autenticazione non riuscita per OVO Energy. Digita le credenziali attuali.",
+                "title": "Nuova autenticazione"
             },
             "user": {
                 "data": {
+                    "account": "ID account OVO (aggiungi solo se hai pi\u00f9 account)",
                     "password": "Password",
                     "username": "Nome utente"
                 },

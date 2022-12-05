@@ -30,7 +30,8 @@
         "step": {
             "init": {
                 "data": {
-                    "webhook_set": "MotionEye-Webhooks konfigurieren, um Ereignisse an Home Assistant zu melden",
+                    "stream_url_template": "Stream-URL-Vorlage",
+                    "webhook_set": "MotionEye Webhooks konfigurieren, um Ereignisse an Home Assistant zu melden",
                     "webhook_set_overwrite": "\u00dcberschreiben von nicht bekannten Webhooks"
                 }
             }

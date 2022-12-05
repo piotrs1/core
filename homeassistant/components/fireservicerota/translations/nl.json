@@ -2,21 +2,15 @@
     "config": {
         "abort": {
             "already_configured": "Account is al geconfigureerd",
-            "reauth_successful": "Herauthenticatie was succesvol"
+            "reauth_successful": "Herauthenticatie geslaagd"
         },
         "create_entry": {
-            "default": "Succesvol geauthenticeerd"
+            "default": "Authenticatie geslaagd"
         },
         "error": {
             "invalid_auth": "Ongeldige authenticatie"
         },
         "step": {
-            "reauth": {
-                "data": {
-                    "password": "Wachtwoord"
-                },
-                "description": "Authenticatietokens zijn ongeldig geworden, log in om ze opnieuw te maken."
-            },
             "user": {
                 "data": {
                     "password": "Wachtwoord",

@@ -3,21 +3,25 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from copy import copy
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 import logging
 from numbers import Number
 import statistics
+from typing import Any
 
 import voluptuous as vol
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.input_number import DOMAIN as INPUT_NUMBER_DOMAIN
-from homeassistant.components.recorder import history
+from homeassistant.components.recorder import get_instance, history
 from homeassistant.components.sensor import (
+    ATTR_STATE_CLASS,
     DEVICE_CLASSES as SENSOR_DEVICE_CLASSES,
     DOMAIN as SENSOR_DOMAIN,
     PLATFORM_SCHEMA,
+    STATE_CLASSES as SENSOR_STATE_CLASSES,
+    SensorDeviceClass,
     SensorEntity,
 )
 from homeassistant.const import (
@@ -27,13 +31,16 @@ from homeassistant.const import (
     ATTR_UNIT_OF_MEASUREMENT,
     CONF_ENTITY_ID,
     CONF_NAME,
+    CONF_UNIQUE_ID,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import callback
+from homeassistant.core import Event, HomeAssistant, State, callback
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.reload import async_setup_reload_service
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util.decorator import Registry
 import homeassistant.util.dt as dt_util
 
@@ -47,7 +54,7 @@ FILTER_NAME_OUTLIER = "outlier"
 FILTER_NAME_THROTTLE = "throttle"
 FILTER_NAME_TIME_THROTTLE = "time_throttle"
 FILTER_NAME_TIME_SMA = "time_simple_moving_average"
-FILTERS = Registry()
+FILTERS: Registry[str, type[Filter]] = Registry()
 
 CONF_FILTERS = "filters"
 CONF_FILTER_NAME = "filter"
@@ -146,6 +153,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
             cv.entity_domain(INPUT_NUMBER_DOMAIN),
         ),
         vol.Optional(CONF_NAME): cv.string,
+        vol.Optional(CONF_UNIQUE_ID): cv.string,
         vol.Required(CONF_FILTERS): vol.All(
             cv.ensure_list,
             [
@@ -163,53 +171,73 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 )
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up the template sensors."""
 
     await async_setup_reload_service(hass, DOMAIN, PLATFORMS)
 
-    name = config.get(CONF_NAME)
-    entity_id = config.get(CONF_ENTITY_ID)
+    name: str | None = config.get(CONF_NAME)
+    unique_id: str | None = config.get(CONF_UNIQUE_ID)
+    entity_id: str = config[CONF_ENTITY_ID]
 
+    filter_configs: list[dict[str, Any]] = config[CONF_FILTERS]
     filters = [
         FILTERS[_filter.pop(CONF_FILTER_NAME)](entity=entity_id, **_filter)
-        for _filter in config[CONF_FILTERS]
+        for _filter in filter_configs
     ]
 
-    async_add_entities([SensorFilter(name, entity_id, filters)])
+    async_add_entities([SensorFilter(name, unique_id, entity_id, filters)])
 
 
 class SensorFilter(SensorEntity):
     """Representation of a Filter Sensor."""
 
-    def __init__(self, name, entity_id, filters):
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        name: str | None,
+        unique_id: str | None,
+        entity_id: str,
+        filters: list[Filter],
+    ) -> None:
         """Initialize the sensor."""
-        self._name = name
+        self._attr_name = name
+        self._attr_unique_id = unique_id
         self._entity = entity_id
-        self._unit_of_measurement = None
-        self._state = None
+        self._attr_native_unit_of_measurement = None
+        self._state: str | None = None
         self._filters = filters
-        self._icon = None
-        self._device_class = None
+        self._attr_icon = None
+        self._attr_device_class = None
+        self._attr_state_class = None
+        self._attr_extra_state_attributes = {ATTR_ENTITY_ID: entity_id}
 
     @callback
-    def _update_filter_sensor_state_event(self, event):
+    def _update_filter_sensor_state_event(self, event: Event) -> None:
         """Handle device state changes."""
         _LOGGER.debug("Update filter on event: %s", event)
         self._update_filter_sensor_state(event.data.get("new_state"))
 
     @callback
-    def _update_filter_sensor_state(self, new_state, update_ha=True):
+    def _update_filter_sensor_state(
+        self, new_state: State | None, update_ha: bool = True
+    ) -> None:
         """Process device state changes."""
         if new_state is None:
             _LOGGER.warning(
-                "While updating filter %s, the new_state is None", self._name
+                "While updating filter %s, the new_state is None", self.name
             )
             self._state = None
             self.async_write_ha_state()
             return
 
-        if new_state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+        if new_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             self._state = new_state.state
             self.async_write_ha_state()
             return
@@ -239,24 +267,30 @@ class SensorFilter(SensorEntity):
 
         self._state = temp_state.state
 
-        if self._icon is None:
-            self._icon = new_state.attributes.get(ATTR_ICON, ICON)
+        if self._attr_icon is None:
+            self._attr_icon = new_state.attributes.get(ATTR_ICON, ICON)
 
         if (
-            self._device_class is None
+            self._attr_device_class is None
             and new_state.attributes.get(ATTR_DEVICE_CLASS) in SENSOR_DEVICE_CLASSES
         ):
-            self._device_class = new_state.attributes.get(ATTR_DEVICE_CLASS)
+            self._attr_device_class = new_state.attributes.get(ATTR_DEVICE_CLASS)
 
-        if self._unit_of_measurement is None:
-            self._unit_of_measurement = new_state.attributes.get(
+        if (
+            self._attr_state_class is None
+            and new_state.attributes.get(ATTR_STATE_CLASS) in SENSOR_STATE_CLASSES
+        ):
+            self._attr_state_class = new_state.attributes.get(ATTR_STATE_CLASS)
+
+        if self._attr_native_unit_of_measurement is None:
+            self._attr_native_unit_of_measurement = new_state.attributes.get(
                 ATTR_UNIT_OF_MEASUREMENT
             )
 
         if update_ha:
             self.async_write_ha_state()
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """Register callbacks."""
 
         if "recorder" in self.hass.config.components:
@@ -279,7 +313,7 @@ class SensorFilter(SensorEntity):
 
             # Retrieve the largest window_size of each type
             if largest_window_items > 0:
-                filter_history = await self.hass.async_add_executor_job(
+                filter_history = await get_instance(self.hass).async_add_executor_job(
                     partial(
                         history.get_last_state_changes,
                         self.hass,
@@ -291,7 +325,7 @@ class SensorFilter(SensorEntity):
                     history_list.extend(filter_history[self._entity])
             if largest_window_time > timedelta(seconds=0):
                 start = dt_util.utcnow() - largest_window_time
-                filter_history = await self.hass.async_add_executor_job(
+                filter_history = await get_instance(self.hass).async_add_executor_job(
                     partial(
                         history.state_changes_during_period,
                         self.hass,
@@ -327,39 +361,12 @@ class SensorFilter(SensorEntity):
         )
 
     @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
-
-    @property
-    def state(self):
+    def native_value(self) -> datetime | str | None:
         """Return the state of the sensor."""
+        if self._state is not None and self.device_class == SensorDeviceClass.TIMESTAMP:
+            return datetime.fromisoformat(self._state)
+
         return self._state
-
-    @property
-    def icon(self):
-        """Return the icon to use in the frontend, if any."""
-        return self._icon
-
-    @property
-    def unit_of_measurement(self):
-        """Return the unit_of_measurement of the device."""
-        return self._unit_of_measurement
-
-    @property
-    def should_poll(self):
-        """No polling needed."""
-        return False
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes of the sensor."""
-        return {ATTR_ENTITY_ID: self._entity}
-
-    @property
-    def device_class(self):
-        """Return device class."""
-        return self._device_class
 
 
 class FilterState:
@@ -405,7 +412,7 @@ class Filter:
         :param entity: used for debugging only
         """
         if isinstance(window_size, int):
-            self.states = deque(maxlen=window_size)
+            self.states: deque = deque(maxlen=window_size)
             self.window_unit = WINDOW_SIZE_UNIT_NUMBER_EVENTS
         else:
             self.states = deque(maxlen=0)
@@ -476,7 +483,7 @@ class RangeFilter(Filter, SensorEntity):
         super().__init__(FILTER_NAME_RANGE, precision=precision, entity=entity)
         self._lower_bound = lower_bound
         self._upper_bound = upper_bound
-        self._stats_internal = Counter()
+        self._stats_internal: Counter = Counter()
 
     def _filter_state(self, new_state):
         """Implement the range filter."""
@@ -522,7 +529,7 @@ class OutlierFilter(Filter, SensorEntity):
         """
         super().__init__(FILTER_NAME_OUTLIER, window_size, precision, entity)
         self._radius = radius
-        self._stats_internal = Counter()
+        self._stats_internal: Counter = Counter()
         self._store_raw = True
 
     def _filter_state(self, new_state):
@@ -605,7 +612,7 @@ class TimeSMAFilter(Filter, SensorEntity):
 
         moving_sum = 0
         start = new_state.timestamp - self._time_window
-        prev_state = self.last_leak or self.queue[0]
+        prev_state = self.last_leak if self.last_leak is not None else self.queue[0]
         for state in self.queue:
             moving_sum += (state.timestamp - start).total_seconds() * prev_state.state
             start = state.timestamp

@@ -1,7 +1,7 @@
 """Test init of Nettigo Air Monitor integration."""
 from unittest.mock import patch
 
-from nettigo_air_monitor import ApiError
+from nettigo_air_monitor import ApiError, AuthFailed
 
 from homeassistant.components.air_quality import DOMAIN as AIR_QUALITY_PLATFORM
 from homeassistant.components.nam.const import DOMAIN
@@ -9,8 +9,9 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import entity_registry as er
 
+from . import init_integration
+
 from tests.common import MockConfigEntry
-from tests.components.nam import init_integration
 
 
 async def test_async_setup_entry(hass):
@@ -31,14 +32,50 @@ async def test_config_not_ready(hass):
         unique_id="aa:bb:cc:dd:ee:ff",
         data={"host": "10.10.2.3"},
     )
+    entry.add_to_hass(hass)
 
     with patch(
-        "homeassistant.components.nam.NettigoAirMonitor._async_get_data",
+        "homeassistant.components.nam.NettigoAirMonitor.initialize",
         side_effect=ApiError("API Error"),
     ):
-        entry.add_to_hass(hass)
         await hass.config_entries.async_setup(entry.entry_id)
         assert entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_config_not_ready_while_checking_credentials(hass):
+    """Test for setup failure if the connection fails while checking credentials."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="10.10.2.3",
+        unique_id="aa:bb:cc:dd:ee:ff",
+        data={"host": "10.10.2.3"},
+    )
+    entry.add_to_hass(hass)
+
+    with patch("homeassistant.components.nam.NettigoAirMonitor.initialize"), patch(
+        "homeassistant.components.nam.NettigoAirMonitor.async_check_credentials",
+        side_effect=ApiError("API Error"),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        assert entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_config_auth_failed(hass):
+    """Test for setup failure if the auth fails."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="10.10.2.3",
+        unique_id="aa:bb:cc:dd:ee:ff",
+        data={"host": "10.10.2.3"},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "homeassistant.components.nam.NettigoAirMonitor.async_check_credentials",
+        side_effect=AuthFailed("Authorization has failed"),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        assert entry.state is ConfigEntryState.SETUP_ERROR
 
 
 async def test_unload_entry(hass):

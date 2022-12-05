@@ -9,14 +9,15 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_TRANSITION,
     DOMAIN as DOMAIN_LIGHT,
-    SUPPORT_BRIGHTNESS,
-    SUPPORT_TRANSITION,
+    ColorMode,
     LightEntity,
+    LightEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, CONF_DOMAIN, CONF_ENTITIES
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import ConfigType, HomeAssistantType
+from homeassistant.helpers.typing import ConfigType
 
 from . import LcnEntity
 from .const import (
@@ -32,7 +33,7 @@ PARALLEL_UPDATES = 0
 
 
 def create_lcn_light_entity(
-    hass: HomeAssistantType, entity_config: ConfigType, config_entry: ConfigEntry
+    hass: HomeAssistant, entity_config: ConfigType, config_entry: ConfigEntry
 ) -> LcnEntity:
     """Set up an entity for this domain."""
     device_connection = get_device_connection(
@@ -46,7 +47,7 @@ def create_lcn_light_entity(
 
 
 async def async_setup_entry(
-    hass: HomeAssistantType,
+    hass: HomeAssistant,
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -62,6 +63,8 @@ async def async_setup_entry(
 
 class LcnOutputLight(LcnEntity, LightEntity):
     """Representation of a LCN light for output ports."""
+
+    _attr_supported_features = LightEntityFeature.TRANSITION
 
     def __init__(
         self, config: ConfigType, entry_id: str, device_connection: DeviceConnectionType
@@ -80,6 +83,12 @@ class LcnOutputLight(LcnEntity, LightEntity):
         self._is_on = False
         self._is_dimming_to_zero = False
 
+        if self.dimmable:
+            self._attr_color_mode = ColorMode.BRIGHTNESS
+        else:
+            self._attr_color_mode = ColorMode.ONOFF
+        self._attr_supported_color_modes = {self._attr_color_mode}
+
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
@@ -91,13 +100,6 @@ class LcnOutputLight(LcnEntity, LightEntity):
         await super().async_will_remove_from_hass()
         if not self.device_connection.is_group:
             await self.device_connection.cancel_status_request_handler(self.output)
-
-    @property
-    def supported_features(self) -> int:
-        """Flag supported features."""
-        if self.dimmable:
-            return SUPPORT_TRANSITION | SUPPORT_BRIGHTNESS
-        return SUPPORT_TRANSITION
 
     @property
     def brightness(self) -> int | None:
@@ -165,6 +167,9 @@ class LcnOutputLight(LcnEntity, LightEntity):
 
 class LcnRelayLight(LcnEntity, LightEntity):
     """Representation of a LCN light for relay ports."""
+
+    _attr_color_mode = ColorMode.ONOFF
+    _attr_supported_color_modes = {ColorMode.ONOFF}
 
     def __init__(
         self, config: ConfigType, entry_id: str, device_connection: DeviceConnectionType

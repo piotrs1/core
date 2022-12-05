@@ -18,10 +18,10 @@
         "_": {
             "auto": "Automaatne",
             "cool": "Jahuta",
-            "dry": "Kuiv",
-            "fan_only": "Ainult ventilaator",
-            "heat": "Soojenda",
-            "heat_cool": "K\u00fcta/jahuta",
+            "dry": "Kuivata",
+            "fan_only": "Ventileeri",
+            "heat": "K\u00fcta",
+            "heat_cool": "K\u00fcta",
             "off": "V\u00e4ljas"
         }
     },

@@ -3,7 +3,15 @@
   "name": "SimpliSafe",
   "config_flow": true,
   "documentation": "https://www.home-assistant.io/integrations/simplisafe",
-  "requirements": ["simplisafe-python==11.0.1"],
+  "requirements": ["simplisafe-python==2022.11.2"],
   "codeowners": ["@bachya"],
-  "iot_class": "cloud_polling"
+  "iot_class": "cloud_polling",
+  "dhcp": [
+    {
+      "hostname": "simplisafe*",
+      "macaddress": "30AEA4*"
+    }
+  ],
+  "loggers": ["simplipy"],
+  "integration_type": "hub"
 }

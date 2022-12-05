@@ -1,4 +1,19 @@
 {
+    "issues": {
+        "legacy_subscription": {
+            "fix_flow": {
+                "abort": {
+                    "operation_took_too_long": "Operasi terlalu lama. Coba lagi nanti."
+                },
+                "step": {
+                    "confirm_change_plan": {
+                        "description": "Kami baru saja memperbarui sistem langganan kami. Untuk terus menggunakan Home Assistant Cloud, Anda perlu menyetujui perubahan tersebut satu kali di PayPal.\n\nIni membutuhkan waktu 1 menit dan tidak akan menaikkan harga."
+                    }
+                }
+            },
+            "title": "Langganan lawas terdeteksi"
+        }
+    },
     "system_health": {
         "info": {
             "alexa_enabled": "Alexa Diaktifkan",
@@ -10,6 +25,7 @@
             "relayer_connected": "Relayer Terhubung",
             "remote_connected": "Terhubung Jarak Jauh",
             "remote_enabled": "Kontrol Jarak Jauh Diaktifkan",
+            "remote_server": "Server Daring",
             "subscription_expiration": "Masa Kedaluwarsa Langganan"
         }
     }

@@ -1,4 +1,6 @@
 """Support for LaCrosse sensor components."""
+from __future__ import annotations
+
 from datetime import timedelta
 import logging
 
@@ -9,7 +11,9 @@ import voluptuous as vol
 from homeassistant.components.sensor import (
     ENTITY_ID_FORMAT,
     PLATFORM_SCHEMA,
+    SensorDeviceClass,
     SensorEntity,
+    SensorStateClass,
 )
 from homeassistant.const import (
     CONF_DEVICE,
@@ -21,10 +25,12 @@ from homeassistant.const import (
     PERCENTAGE,
     TEMP_CELSIUS,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.entity import async_generate_entity_id
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,10 +72,15 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 )
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
+def setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
     """Set up the LaCrosse sensors."""
-    usb_device = config.get(CONF_DEVICE)
-    baud = int(config.get(CONF_BAUD))
+    usb_device = config[CONF_DEVICE]
+    baud = int(config[CONF_BAUD])
     expire_after = config.get(CONF_EXPIRE_AFTER)
 
     _LOGGER.debug("%s %s", usb_device, baud)
@@ -79,7 +90,7 @@ def setup_platform(hass, config, add_entities, discovery_info=None):
         lacrosse.open()
     except SerialException as exc:
         _LOGGER.warning("Unable to open serial port: %s", exc)
-        return False
+        return
 
     hass.bus.listen_once(EVENT_HOMEASSISTANT_STOP, lambda event: lacrosse.close())
 
@@ -174,10 +185,12 @@ class LaCrosseSensor(SensorEntity):
 class LaCrosseTemperature(LaCrosseSensor):
     """Implementation of a Lacrosse temperature sensor."""
 
-    _attr_unit_of_measurement = TEMP_CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = TEMP_CELSIUS
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
         return self._temperature
 
@@ -185,11 +198,12 @@ class LaCrosseTemperature(LaCrosseSensor):
 class LaCrosseHumidity(LaCrosseSensor):
     """Implementation of a Lacrosse humidity sensor."""
 
-    _attr_unit_of_measurement = PERCENTAGE
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:water-percent"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
         return self._humidity
 
@@ -198,7 +212,7 @@ class LaCrosseBattery(LaCrosseSensor):
     """Implementation of a Lacrosse battery sensor."""
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
         if self._low_battery is None:
             return None

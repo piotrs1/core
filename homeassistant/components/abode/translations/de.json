@@ -26,9 +26,9 @@
             "user": {
                 "data": {
                     "password": "Passwort",
-                    "username": "E-Mail-Adresse"
+                    "username": "E-Mail"
                 },
-                "title": "Gib deine Abode-Anmeldeinformationen ein"
+                "title": "Gib deine Abode Anmeldeinformationen ein"
             }
         }
     }

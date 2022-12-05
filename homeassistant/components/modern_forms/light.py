@@ -6,15 +6,11 @@ from typing import Any
 from aiomodernforms.const import LIGHT_POWER_OFF, LIGHT_POWER_ON
 import voluptuous as vol
 
-from homeassistant.components.light import (
-    ATTR_BRIGHTNESS,
-    COLOR_MODE_BRIGHTNESS,
-    LightEntity,
-)
+from homeassistant.components.light import ATTR_BRIGHTNESS, ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
-import homeassistant.helpers.entity_platform as entity_platform
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.typing import HomeAssistantType
 from homeassistant.util.percentage import (
     percentage_to_ranged_value,
     ranged_value_to_percentage,
@@ -39,7 +35,7 @@ BRIGHTNESS_RANGE = (1, 255)
 
 
 async def async_setup_entry(
-    hass: HomeAssistantType,
+    hass: HomeAssistant,
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
@@ -83,6 +79,9 @@ async def async_setup_entry(
 class ModernFormsLightEntity(ModernFormsDeviceEntity, LightEntity):
     """Defines a Modern Forms light."""
 
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+
     def __init__(
         self, entry_id: str, coordinator: ModernFormsDataUpdateCoordinator
     ) -> None:
@@ -94,8 +93,6 @@ class ModernFormsLightEntity(ModernFormsDeviceEntity, LightEntity):
             icon=None,
         )
         self._attr_unique_id = f"{self.coordinator.data.info.mac_address}"
-        self._attr_color_mode = COLOR_MODE_BRIGHTNESS
-        self._attr_supported_color_modes = {COLOR_MODE_BRIGHTNESS}
 
     @property
     def brightness(self) -> int | None:

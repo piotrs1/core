@@ -1,7 +1,7 @@
 {
     "config": {
         "abort": {
-            "already_configured": "El compte ja ha estat configurat",
+            "already_configured": "El compte ja est\u00e0 configurat",
             "no_device": "Cap dels teus dispositius t\u00e9 activada la opci\u00f3 \"Troba el meu iPhone\"",
             "reauth_successful": "Re-autenticaci\u00f3 realitzada correctament"
         },
@@ -11,7 +11,7 @@
             "validate_verification_code": "No s'ha pogut verificar el codi de verificaci\u00f3, torna-ho a provar"
         },
         "step": {
-            "reauth": {
+            "reauth_confirm": {
                 "data": {
                     "password": "Contrasenya"
                 },

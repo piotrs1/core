@@ -4,23 +4,25 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components import (
+    button,
+    climate,
     cover,
     fan,
+    humidifier,
     image_processing,
+    input_button,
     input_number,
     light,
+    media_player,
     timer,
     vacuum,
 )
-from homeassistant.components.alarm_control_panel import ATTR_CODE_FORMAT, FORMAT_NUMBER
-from homeassistant.components.alarm_control_panel.const import (
-    SUPPORT_ALARM_ARM_AWAY,
-    SUPPORT_ALARM_ARM_HOME,
-    SUPPORT_ALARM_ARM_NIGHT,
+from homeassistant.components.alarm_control_panel import (
+    AlarmControlPanelEntityFeature,
+    CodeFormat,
 )
-import homeassistant.components.climate.const as climate
-import homeassistant.components.media_player.const as media_player
 from homeassistant.const import (
+    ATTR_CODE_FORMAT,
     ATTR_SUPPORTED_FEATURES,
     ATTR_TEMPERATURE,
     ATTR_UNIT_OF_MEASUREMENT,
@@ -30,6 +32,7 @@ from homeassistant.const import (
     STATE_ALARM_ARMED_NIGHT,
     STATE_IDLE,
     STATE_LOCKED,
+    STATE_LOCKING,
     STATE_OFF,
     STATE_ON,
     STATE_PAUSED,
@@ -37,6 +40,7 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
     STATE_UNLOCKED,
+    STATE_UNLOCKING,
 )
 from homeassistant.core import State
 import homeassistant.util.color as color_util
@@ -47,6 +51,7 @@ from .const import (
     API_THERMOSTAT_MODES,
     API_THERMOSTAT_PRESETS,
     DATE_FORMAT,
+    PRESET_MODE_NA,
     Inputs,
 )
 from .errors import UnsupportedProperty
@@ -82,28 +87,23 @@ class AlexaCapability:
         """Return the Alexa API name of this interface."""
         raise NotImplementedError
 
-    @staticmethod
-    def properties_supported() -> list[dict]:
+    def properties_supported(self) -> list[dict]:
         """Return what properties this entity supports."""
         return []
 
-    @staticmethod
-    def properties_proactively_reported() -> bool:
+    def properties_proactively_reported(self) -> bool:
         """Return True if properties asynchronously reported."""
         return False
 
-    @staticmethod
-    def properties_retrievable() -> bool:
+    def properties_retrievable(self) -> bool:
         """Return True if properties can be retrieved."""
         return False
 
-    @staticmethod
-    def properties_non_controllable() -> bool:
+    def properties_non_controllable(self) -> bool | None:
         """Return True if non controllable."""
         return None
 
-    @staticmethod
-    def get_property(name):
+    def get_property(self, name):
         """Read and return a property.
 
         Return value should be a dict, or raise UnsupportedProperty.
@@ -113,13 +113,11 @@ class AlexaCapability:
         """
         raise UnsupportedProperty(name)
 
-    @staticmethod
-    def supports_deactivation():
+    def supports_deactivation(self):
         """Applicable only to scenes."""
         return None
 
-    @staticmethod
-    def capability_proactively_reported():
+    def capability_proactively_reported(self):
         """Return True if the capability is proactively reported.
 
         Set properties_proactively_reported() for proactively reported properties.
@@ -127,16 +125,14 @@ class AlexaCapability:
         """
         return None
 
-    @staticmethod
-    def capability_resources():
+    def capability_resources(self):
         """Return the capability object.
 
         Applicable to ToggleController, RangeController, and ModeController interfaces.
         """
         return []
 
-    @staticmethod
-    def configuration():
+    def configuration(self):
         """Return the configuration object.
 
         Applicable to the ThermostatController, SecurityControlPanel, ModeController, RangeController,
@@ -144,8 +140,7 @@ class AlexaCapability:
         """
         return []
 
-    @staticmethod
-    def configurations():
+    def configurations(self):
         """Return the configurations object.
 
         The plural configurations object is different that the singular configuration object.
@@ -153,26 +148,22 @@ class AlexaCapability:
         """
         return []
 
-    @staticmethod
-    def inputs():
+    def inputs(self):
         """Applicable only to media players."""
         return []
 
-    @staticmethod
-    def semantics():
+    def semantics(self):
         """Return the semantics object.
 
         Applicable to ToggleController, RangeController, and ModeController interfaces.
         """
         return []
 
-    @staticmethod
-    def supported_operations():
+    def supported_operations(self):
         """Return the supportedOperations object."""
         return []
 
-    @staticmethod
-    def camera_stream_configurations():
+    def camera_stream_configurations(self):
         """Applicable only to CameraStreamController."""
         return None
 
@@ -180,57 +171,45 @@ class AlexaCapability:
         """Serialize according to the Discovery API."""
         result = {"type": "AlexaInterface", "interface": self.name(), "version": "3"}
 
-        instance = self.instance
-        if instance is not None:
+        if (instance := self.instance) is not None:
             result["instance"] = instance
 
-        properties_supported = self.properties_supported()
-        if properties_supported:
+        if properties_supported := self.properties_supported():
             result["properties"] = {
-                "supported": self.properties_supported(),
+                "supported": properties_supported,
                 "proactivelyReported": self.properties_proactively_reported(),
                 "retrievable": self.properties_retrievable(),
             }
 
-        proactively_reported = self.capability_proactively_reported()
-        if proactively_reported is not None:
+        if (proactively_reported := self.capability_proactively_reported()) is not None:
             result["proactivelyReported"] = proactively_reported
 
-        non_controllable = self.properties_non_controllable()
-        if non_controllable is not None:
+        if (non_controllable := self.properties_non_controllable()) is not None:
             result["properties"]["nonControllable"] = non_controllable
 
-        supports_deactivation = self.supports_deactivation()
-        if supports_deactivation is not None:
+        if (supports_deactivation := self.supports_deactivation()) is not None:
             result["supportsDeactivation"] = supports_deactivation
 
-        capability_resources = self.capability_resources()
-        if capability_resources:
+        if capability_resources := self.capability_resources():
             result["capabilityResources"] = capability_resources
 
-        configuration = self.configuration()
-        if configuration:
+        if configuration := self.configuration():
             result["configuration"] = configuration
 
         # The plural configurations object is different than the singular configuration object above.
-        configurations = self.configurations()
-        if configurations:
+        if configurations := self.configurations():
             result["configurations"] = configurations
 
-        semantics = self.semantics()
-        if semantics:
+        if semantics := self.semantics():
             result["semantics"] = semantics
 
-        supported_operations = self.supported_operations()
-        if supported_operations:
+        if supported_operations := self.supported_operations():
             result["supportedOperations"] = supported_operations
 
-        inputs = self.inputs()
-        if inputs:
+        if inputs := self.inputs():
             result["inputs"] = inputs
 
-        camera_stream_configurations = self.camera_stream_configurations()
-        if camera_stream_configurations:
+        if camera_stream_configurations := self.camera_stream_configurations():
             result["cameraStreamConfigurations"] = camera_stream_configurations
 
         return result
@@ -262,8 +241,7 @@ class AlexaCapability:
                 "timeOfSample": dt_util.utcnow().strftime(DATE_FORMAT),
                 "uncertaintyInMilliseconds": 0,
             }
-            instance = self.instance
-            if instance is not None:
+            if (instance := self.instance) is not None:
                 result["instance"] = instance
 
             yield result
@@ -279,6 +257,7 @@ class Alexa(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -287,10 +266,13 @@ class Alexa(AlexaCapability):
         "en-US",
         "es-ES",
         "es-MX",
+        "es-US",
         "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def name(self):
@@ -305,6 +287,7 @@ class AlexaEndpointHealth(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -312,9 +295,14 @@ class AlexaEndpointHealth(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def __init__(self, hass, entity):
@@ -355,6 +343,7 @@ class AlexaPowerController(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -362,9 +351,14 @@ class AlexaPowerController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def name(self):
@@ -389,7 +383,11 @@ class AlexaPowerController(AlexaCapability):
             raise UnsupportedProperty(name)
 
         if self.entity.domain == climate.DOMAIN:
-            is_on = self.entity.state != climate.HVAC_MODE_OFF
+            is_on = self.entity.state != climate.HVACMode.OFF
+        elif self.entity.domain == fan.DOMAIN:
+            is_on = self.entity.state == fan.STATE_ON
+        elif self.entity.domain == humidifier.DOMAIN:
+            is_on = self.entity.state == humidifier.STATE_ON
         elif self.entity.domain == vacuum.DOMAIN:
             is_on = self.entity.state == vacuum.STATE_CLEANING
         elif self.entity.domain == timer.DOMAIN:
@@ -408,6 +406,7 @@ class AlexaLockController(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -446,9 +445,11 @@ class AlexaLockController(AlexaCapability):
         if name != "lockState":
             raise UnsupportedProperty(name)
 
-        if self.entity.state == STATE_LOCKED:
+        # If its unlocking its still locked and not unlocked yet
+        if self.entity.state in (STATE_UNLOCKING, STATE_LOCKED):
             return "LOCKED"
-        if self.entity.state == STATE_UNLOCKED:
+        # If its locking its still unlocked and not locked yet
+        if self.entity.state in (STATE_LOCKING, STATE_UNLOCKED):
             return "UNLOCKED"
         return "JAMMED"
 
@@ -467,9 +468,14 @@ class AlexaSceneController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def __init__(self, entity, supports_deactivation):
@@ -489,6 +495,7 @@ class AlexaBrightnessController(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -496,6 +503,9 @@ class AlexaBrightnessController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
         "hi-IN",
         "it-IT",
@@ -542,6 +552,9 @@ class AlexaColorController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
         "hi-IN",
         "it-IT",
@@ -593,6 +606,9 @@ class AlexaColorTemperatureController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
         "hi-IN",
         "it-IT",
@@ -627,55 +643,6 @@ class AlexaColorTemperatureController(AlexaCapability):
         return None
 
 
-class AlexaPercentageController(AlexaCapability):
-    """Implements Alexa.PercentageController.
-
-    https://developer.amazon.com/docs/device-apis/alexa-percentagecontroller.html
-    """
-
-    supported_locales = {
-        "de-DE",
-        "en-AU",
-        "en-CA",
-        "en-GB",
-        "en-IN",
-        "en-US",
-        "es-ES",
-        "fr-FR",
-        "it-IT",
-        "ja-JP",
-    }
-
-    def name(self):
-        """Return the Alexa API name of this interface."""
-        return "Alexa.PercentageController"
-
-    def properties_supported(self):
-        """Return what properties this entity supports."""
-        return [{"name": "percentage"}]
-
-    def properties_proactively_reported(self):
-        """Return True if properties asynchronously reported."""
-        return True
-
-    def properties_retrievable(self):
-        """Return True if properties can be retrieved."""
-        return True
-
-    def get_property(self, name):
-        """Read and return a property."""
-        if name != "percentage":
-            raise UnsupportedProperty(name)
-
-        if self.entity.domain == fan.DOMAIN:
-            return self.entity.attributes.get(fan.ATTR_PERCENTAGE) or 0
-
-        if self.entity.domain == cover.DOMAIN:
-            return self.entity.attributes.get(cover.ATTR_CURRENT_POSITION, 0)
-
-        return 0
-
-
 class AlexaSpeaker(AlexaCapability):
     """Implements Alexa.Speaker.
 
@@ -691,6 +658,7 @@ class AlexaSpeaker(AlexaCapability):
         "en-US",
         "es-ES",
         "es-MX",
+        "fr-FR",  # Not documented as of 2021-12-04, see PR #60489
         "it-IT",
         "ja-JP",
     }
@@ -704,7 +672,7 @@ class AlexaSpeaker(AlexaCapability):
         properties = [{"name": "volume"}]
 
         supported = self.entity.attributes.get(ATTR_SUPPORTED_FEATURES, 0)
-        if supported & media_player.SUPPORT_VOLUME_MUTE:
+        if supported & media_player.MediaPlayerEntityFeature.VOLUME_MUTE:
             properties.append({"name": "muted"})
 
         return properties
@@ -748,6 +716,7 @@ class AlexaStepSpeaker(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "fr-FR",  # Not documented as of 2021-12-04, see PR #60489
         "it-IT",
     }
 
@@ -762,7 +731,24 @@ class AlexaPlaybackController(AlexaCapability):
     https://developer.amazon.com/docs/device-apis/alexa-playbackcontroller.html
     """
 
-    supported_locales = {"de-DE", "en-AU", "en-CA", "en-GB", "en-IN", "en-US", "fr-FR"}
+    supported_locales = {
+        "ar-SA",
+        "de-DE",
+        "en-AU",
+        "en-CA",
+        "en-GB",
+        "en-IN",
+        "en-US",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
+        "it-IT",
+        "ja-JP",
+        "pt-BR",
+    }
 
     def name(self):
         """Return the Alexa API name of this interface."""
@@ -776,11 +762,11 @@ class AlexaPlaybackController(AlexaCapability):
         supported_features = self.entity.attributes.get(ATTR_SUPPORTED_FEATURES, 0)
 
         operations = {
-            media_player.SUPPORT_NEXT_TRACK: "Next",
-            media_player.SUPPORT_PAUSE: "Pause",
-            media_player.SUPPORT_PLAY: "Play",
-            media_player.SUPPORT_PREVIOUS_TRACK: "Previous",
-            media_player.SUPPORT_STOP: "Stop",
+            media_player.MediaPlayerEntityFeature.NEXT_TRACK: "Next",
+            media_player.MediaPlayerEntityFeature.PAUSE: "Pause",
+            media_player.MediaPlayerEntityFeature.PLAY: "Play",
+            media_player.MediaPlayerEntityFeature.PREVIOUS_TRACK: "Previous",
+            media_player.MediaPlayerEntityFeature.STOP: "Stop",
         }
 
         return [
@@ -796,7 +782,24 @@ class AlexaInputController(AlexaCapability):
     https://developer.amazon.com/docs/device-apis/alexa-inputcontroller.html
     """
 
-    supported_locales = {"de-DE", "en-AU", "en-CA", "en-GB", "en-IN", "en-US"}
+    supported_locales = {
+        "ar-SA",
+        "de-DE",
+        "en-AU",
+        "en-CA",
+        "en-GB",
+        "en-IN",
+        "en-US",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
+        "it-IT",
+        "ja-JP",
+        "pt-BR",
+    }
 
     def name(self):
         """Return the Alexa API name of this interface."""
@@ -814,6 +817,8 @@ class AlexaInputController(AlexaCapability):
         """Return list of supported inputs."""
         input_list = []
         for source in source_list:
+            if not isinstance(source, str):
+                continue
             formatted_source = (
                 source.lower().replace("-", "").replace("_", "").replace(" ", "")
             )
@@ -832,6 +837,7 @@ class AlexaTemperatureSensor(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -839,9 +845,14 @@ class AlexaTemperatureSensor(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def __init__(self, hass, entity):
@@ -903,11 +914,18 @@ class AlexaContactSensor(AlexaCapability):
         "de-DE",
         "en-AU",
         "en-CA",
+        "en-GB",
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def __init__(self, hass, entity):
@@ -951,9 +969,15 @@ class AlexaMotionSensor(AlexaCapability):
         "de-DE",
         "en-AU",
         "en-CA",
+        "en-GB",
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
         "pt-BR",
@@ -997,6 +1021,7 @@ class AlexaThermostatController(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -1004,7 +1029,11 @@ class AlexaThermostatController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
         "pt-BR",
@@ -1023,9 +1052,9 @@ class AlexaThermostatController(AlexaCapability):
         """Return what properties this entity supports."""
         properties = [{"name": "thermostatMode"}]
         supported = self.entity.attributes.get(ATTR_SUPPORTED_FEATURES, 0)
-        if supported & climate.SUPPORT_TARGET_TEMPERATURE:
+        if supported & climate.ClimateEntityFeature.TARGET_TEMPERATURE:
             properties.append({"name": "targetSetpoint"})
-        if supported & climate.SUPPORT_TARGET_TEMPERATURE_RANGE:
+        if supported & climate.ClimateEntityFeature.TARGET_TEMPERATURE_RANGE:
             properties.append({"name": "lowerSetpoint"})
             properties.append({"name": "upperSetpoint"})
         return properties
@@ -1048,6 +1077,8 @@ class AlexaThermostatController(AlexaCapability):
 
             if preset in API_THERMOSTAT_PRESETS:
                 mode = API_THERMOSTAT_PRESETS[preset]
+            elif self.entity.state == STATE_UNKNOWN:
+                return None
             else:
                 mode = API_THERMOSTAT_MODES.get(self.entity.state)
                 if mode is None:
@@ -1092,8 +1123,7 @@ class AlexaThermostatController(AlexaCapability):
         supported_modes = []
         hvac_modes = self.entity.attributes.get(climate.ATTR_HVAC_MODES)
         for mode in hvac_modes:
-            thermostat_mode = API_THERMOSTAT_MODES.get(mode)
-            if thermostat_mode:
+            if thermostat_mode := API_THERMOSTAT_MODES.get(mode):
                 supported_modes.append(thermostat_mode)
 
         preset_modes = self.entity.attributes.get(climate.ATTR_PRESET_MODES)
@@ -1126,6 +1156,8 @@ class AlexaPowerLevelController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "fr-CA",
         "fr-FR",
         "it-IT",
         "ja-JP",
@@ -1151,9 +1183,6 @@ class AlexaPowerLevelController(AlexaCapability):
         """Read and return a property."""
         if name != "powerLevel":
             raise UnsupportedProperty(name)
-
-        if self.entity.domain == fan.DOMAIN:
-            return self.entity.attributes.get(fan.ATTR_PERCENTAGE) or 0
 
 
 class AlexaSecurityPanelController(AlexaCapability):
@@ -1223,16 +1252,16 @@ class AlexaSecurityPanelController(AlexaCapability):
         configuration = {}
 
         supported_arm_states = [{"value": "DISARMED"}]
-        if supported & SUPPORT_ALARM_ARM_AWAY:
+        if supported & AlarmControlPanelEntityFeature.ARM_AWAY:
             supported_arm_states.append({"value": "ARMED_AWAY"})
-        if supported & SUPPORT_ALARM_ARM_HOME:
+        if supported & AlarmControlPanelEntityFeature.ARM_HOME:
             supported_arm_states.append({"value": "ARMED_STAY"})
-        if supported & SUPPORT_ALARM_ARM_NIGHT:
+        if supported & AlarmControlPanelEntityFeature.ARM_NIGHT:
             supported_arm_states.append({"value": "ARMED_NIGHT"})
 
         configuration["supportedArmStates"] = supported_arm_states
 
-        if code_format == FORMAT_NUMBER:
+        if code_format == CodeFormat.NUMBER:
             configuration["supportedAuthorizationTypes"] = [{"type": "FOUR_DIGIT_PIN"}]
 
         return configuration
@@ -1262,10 +1291,13 @@ class AlexaModeController(AlexaCapability):
         "en-US",
         "es-ES",
         "es-MX",
+        "es-US",
         "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def __init__(self, entity, instance, non_controllable=False):
@@ -1307,6 +1339,12 @@ class AlexaModeController(AlexaCapability):
             mode = self.entity.attributes.get(fan.ATTR_PRESET_MODE, None)
             if mode in self.entity.attributes.get(fan.ATTR_PRESET_MODES, None):
                 return f"{fan.ATTR_PRESET_MODE}.{mode}"
+
+        # Humidifier mode
+        if self.instance == f"{humidifier.DOMAIN}.{humidifier.ATTR_MODE}":
+            mode = self.entity.attributes.get(humidifier.ATTR_MODE, None)
+            if mode in self.entity.attributes.get(humidifier.ATTR_AVAILABLE_MODES, []):
+                return f"{humidifier.ATTR_MODE}.{mode}"
 
         # Cover Position
         if self.instance == f"{cover.DOMAIN}.{cover.ATTR_POSITION}":
@@ -1351,9 +1389,30 @@ class AlexaModeController(AlexaCapability):
             self._resource = AlexaModeResource(
                 [AlexaGlobalCatalog.SETTING_PRESET], False
             )
-            for preset_mode in self.entity.attributes.get(fan.ATTR_PRESET_MODES, []):
+            preset_modes = self.entity.attributes.get(fan.ATTR_PRESET_MODES, [])
+            for preset_mode in preset_modes:
                 self._resource.add_mode(
                     f"{fan.ATTR_PRESET_MODE}.{preset_mode}", [preset_mode]
+                )
+            # Fans with a single preset_mode completely break Alexa discovery, add a
+            # fake preset (see issue #53832).
+            if len(preset_modes) == 1:
+                self._resource.add_mode(
+                    f"{fan.ATTR_PRESET_MODE}.{PRESET_MODE_NA}", [PRESET_MODE_NA]
+                )
+            return self._resource.serialize_capability_resources()
+
+        # Humidifier modes
+        if self.instance == f"{humidifier.DOMAIN}.{humidifier.ATTR_MODE}":
+            self._resource = AlexaModeResource([AlexaGlobalCatalog.SETTING_MODE], False)
+            modes = self.entity.attributes.get(humidifier.ATTR_AVAILABLE_MODES, [])
+            for mode in modes:
+                self._resource.add_mode(f"{humidifier.ATTR_MODE}.{mode}", [mode])
+            # Humidifiers or Fans with a single mode completely break Alexa discovery, add a
+            # fake preset (see issue #53832).
+            if len(modes) == 1:
+                self._resource.add_mode(
+                    f"{humidifier.ATTR_MODE}.{PRESET_MODE_NA}", [PRESET_MODE_NA]
                 )
             return self._resource.serialize_capability_resources()
 
@@ -1389,7 +1448,7 @@ class AlexaModeController(AlexaCapability):
             self._semantics = AlexaSemantics()
 
             # Add open/close semantics if tilt is not supported.
-            if not supported & cover.SUPPORT_SET_TILT_POSITION:
+            if not supported & cover.CoverEntityFeature.SET_TILT_POSITION:
                 lower_labels.append(AlexaSemantics.ACTION_CLOSE)
                 raise_labels.append(AlexaSemantics.ACTION_OPEN)
                 self._semantics.add_states_to_value(
@@ -1441,10 +1500,13 @@ class AlexaRangeController(AlexaCapability):
         "en-US",
         "es-ES",
         "es-MX",
+        "es-US",
         "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def __init__(self, entity, instance, non_controllable=False):
@@ -1480,16 +1542,6 @@ class AlexaRangeController(AlexaCapability):
         if self.entity.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, None):
             return None
 
-        # Fan Speed
-        if self.instance == f"{fan.DOMAIN}.{fan.ATTR_SPEED}":
-            speed_list = self.entity.attributes.get(fan.ATTR_SPEED_LIST)
-            speed = self.entity.attributes.get(fan.ATTR_SPEED)
-            if speed_list is not None and speed is not None:
-                speed_index = next(
-                    (i for i, v in enumerate(speed_list) if v == speed), None
-                )
-                return speed_index
-
         # Cover Position
         if self.instance == f"{cover.DOMAIN}.{cover.ATTR_POSITION}":
             return self.entity.attributes.get(cover.ATTR_CURRENT_POSITION)
@@ -1497,6 +1549,19 @@ class AlexaRangeController(AlexaCapability):
         # Cover Tilt
         if self.instance == f"{cover.DOMAIN}.tilt":
             return self.entity.attributes.get(cover.ATTR_CURRENT_TILT_POSITION)
+
+        # Fan speed percentage
+        if self.instance == f"{fan.DOMAIN}.{fan.ATTR_PERCENTAGE}":
+            supported = self.entity.attributes.get(ATTR_SUPPORTED_FEATURES, 0)
+            if supported and fan.FanEntityFeature.SET_SPEED:
+                return self.entity.attributes.get(fan.ATTR_PERCENTAGE)
+            return 100 if self.entity.state == fan.STATE_ON else 0
+
+        # Humidifier target humidity
+        if self.instance == f"{humidifier.DOMAIN}.{humidifier.ATTR_HUMIDITY}":
+            # If the humidifier is turned off the target humidity attribute is not set.
+            # We return 0 to make clear we do not know the current value.
+            return self.entity.attributes.get(humidifier.ATTR_HUMIDITY, 0)
 
         # Input Number Value
         if self.instance == f"{input_number.DOMAIN}.{input_number.ATTR_VALUE}":
@@ -1524,28 +1589,29 @@ class AlexaRangeController(AlexaCapability):
     def capability_resources(self):
         """Return capabilityResources object."""
 
-        # Fan Speed Resources
-        if self.instance == f"{fan.DOMAIN}.{fan.ATTR_SPEED}":
-            speed_list = self.entity.attributes[fan.ATTR_SPEED_LIST]
-            max_value = len(speed_list) - 1
+        # Fan Speed Percentage Resources
+        if self.instance == f"{fan.DOMAIN}.{fan.ATTR_PERCENTAGE}":
+            percentage_step = self.entity.attributes.get(fan.ATTR_PERCENTAGE_STEP)
             self._resource = AlexaPresetResource(
-                labels=[AlexaGlobalCatalog.SETTING_FAN_SPEED],
+                labels=["Percentage", AlexaGlobalCatalog.SETTING_FAN_SPEED],
                 min_value=0,
-                max_value=max_value,
-                precision=1,
+                max_value=100,
+                # precision must be a divider of 100 and must be an integer; set step
+                # size to 1 for a consistent behavior except for on/off fans
+                precision=1 if percentage_step else 100,
+                unit=AlexaGlobalCatalog.UNIT_PERCENT,
             )
-            for index, speed in enumerate(speed_list):
-                labels = []
-                if isinstance(speed, str):
-                    labels.append(speed.replace("_", " "))
-                if index == 1:
-                    labels.append(AlexaGlobalCatalog.VALUE_MINIMUM)
-                if index == max_value:
-                    labels.append(AlexaGlobalCatalog.VALUE_MAXIMUM)
+            return self._resource.serialize_capability_resources()
 
-                if len(labels) > 0:
-                    self._resource.add_preset(value=index, labels=labels)
-
+        # Humidifier Target Humidity Resources
+        if self.instance == f"{humidifier.DOMAIN}.{humidifier.ATTR_HUMIDITY}":
+            self._resource = AlexaPresetResource(
+                labels=["Humidity", "Percentage", "Target humidity"],
+                min_value=self.entity.attributes.get(humidifier.ATTR_MIN_HUMIDITY, 10),
+                max_value=self.entity.attributes.get(humidifier.ATTR_MAX_HUMIDITY, 90),
+                precision=1,
+                unit=AlexaGlobalCatalog.UNIT_PERCENT,
+            )
             return self._resource.serialize_capability_resources()
 
         # Cover Position Resources
@@ -1625,7 +1691,7 @@ class AlexaRangeController(AlexaCapability):
             self._semantics = AlexaSemantics()
 
             # Add open/close semantics if tilt is not supported.
-            if not supported & cover.SUPPORT_SET_TILT_POSITION:
+            if not supported & cover.CoverEntityFeature.SET_TILT_POSITION:
                 lower_labels.append(AlexaSemantics.ACTION_CLOSE)
                 raise_labels.append(AlexaSemantics.ACTION_OPEN)
                 self._semantics.add_states_to_value(
@@ -1658,6 +1724,36 @@ class AlexaRangeController(AlexaCapability):
             )
             return self._semantics.serialize_semantics()
 
+        # Fan Speed Percentage
+        if self.instance == f"{fan.DOMAIN}.{fan.ATTR_PERCENTAGE}":
+            lower_labels = [AlexaSemantics.ACTION_LOWER]
+            raise_labels = [AlexaSemantics.ACTION_RAISE]
+            self._semantics = AlexaSemantics()
+
+            self._semantics.add_action_to_directive(
+                lower_labels, "SetRangeValue", {"rangeValue": 0}
+            )
+            self._semantics.add_action_to_directive(
+                raise_labels, "SetRangeValue", {"rangeValue": 100}
+            )
+            return self._semantics.serialize_semantics()
+
+        # Target Humidity Percentage
+        if self.instance == f"{humidifier.DOMAIN}.{humidifier.ATTR_HUMIDITY}":
+            lower_labels = [AlexaSemantics.ACTION_LOWER]
+            raise_labels = [AlexaSemantics.ACTION_RAISE]
+            self._semantics = AlexaSemantics()
+            min_value = self.entity.attributes.get(humidifier.ATTR_MIN_HUMIDITY, 10)
+            max_value = self.entity.attributes.get(humidifier.ATTR_MAX_HUMIDITY, 90)
+
+            self._semantics.add_action_to_directive(
+                lower_labels, "SetRangeValue", {"rangeValue": min_value}
+            )
+            self._semantics.add_action_to_directive(
+                raise_labels, "SetRangeValue", {"rangeValue": max_value}
+            )
+            return self._semantics.serialize_semantics()
+
         return None
 
 
@@ -1685,8 +1781,10 @@ class AlexaToggleController(AlexaCapability):
         "en-US",
         "es-ES",
         "es-MX",
+        "es-US",
         "fr-CA",
         "fr-FR",
+        "hi-IN",
         "it-IT",
         "ja-JP",
         "pt-BR",
@@ -1747,6 +1845,7 @@ class AlexaChannelController(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -1755,6 +1854,8 @@ class AlexaChannelController(AlexaCapability):
         "en-US",
         "es-ES",
         "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
         "hi-IN",
         "it-IT",
@@ -1774,6 +1875,7 @@ class AlexaDoorbellEventSource(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -1788,6 +1890,7 @@ class AlexaDoorbellEventSource(AlexaCapability):
         "hi-IN",
         "it-IT",
         "ja-JP",
+        "pt-BR",
     }
 
     def name(self):
@@ -1805,7 +1908,24 @@ class AlexaPlaybackStateReporter(AlexaCapability):
     https://developer.amazon.com/docs/device-apis/alexa-playbackstatereporter.html
     """
 
-    supported_locales = {"de-DE", "en-GB", "en-US", "es-MX", "fr-FR"}
+    supported_locales = {
+        "ar-SA",
+        "de-DE",
+        "en-AU",
+        "en-CA",
+        "en-GB",
+        "en-IN",
+        "en-US",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
+        "it-IT",
+        "ja-JP",
+        "pt-BR",
+    }
 
     def name(self):
         """Return the Alexa API name of this interface."""
@@ -1843,7 +1963,24 @@ class AlexaSeekController(AlexaCapability):
     https://developer.amazon.com/docs/device-apis/alexa-seekcontroller.html
     """
 
-    supported_locales = {"de-DE", "en-GB", "en-US", "es-MX"}
+    supported_locales = {
+        "ar-SA",
+        "de-DE",
+        "en-AU",
+        "en-CA",
+        "en-GB",
+        "en-IN",
+        "en-US",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
+        "it-IT",
+        "ja-JP",
+        "pt-BR",
+    }
 
     def name(self):
         """Return the Alexa API name of this interface."""
@@ -1891,7 +2028,10 @@ class AlexaEventDetectionSensor(AlexaCapability):
         if self.entity.domain == image_processing.DOMAIN:
             if int(state):
                 human_presence = "DETECTED"
-        elif state == STATE_ON:
+        elif state == STATE_ON or self.entity.domain in [
+            input_button.DOMAIN,
+            button.DOMAIN,
+        ]:
             human_presence = "DETECTED"
 
         return {"value": human_presence}
@@ -1903,7 +2043,8 @@ class AlexaEventDetectionSensor(AlexaCapability):
             "detectionModes": {
                 "humanPresence": {
                     "featureAvailability": "ENABLED",
-                    "supportsNotDetected": True,
+                    "supportsNotDetected": self.entity.domain
+                    not in [input_button.DOMAIN, button.DOMAIN],
                 }
             },
         }
@@ -1915,7 +2056,24 @@ class AlexaEqualizerController(AlexaCapability):
     https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-equalizercontroller.html
     """
 
-    supported_locales = {"de-DE", "en-IN", "en-US", "es-ES", "it-IT", "ja-JP", "pt-BR"}
+    supported_locales = {
+        "de-DE",
+        "en-AU",
+        "en-CA",
+        "en-GB",
+        "en-IN",
+        "en-US",
+        "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
+        "fr-FR",
+        "hi-IN",
+        "it-IT",
+        "ja-JP",
+        "pt-BR",
+    }
+
     VALID_SOUND_MODES = {
         "MOVIE",
         "MUSIC",
@@ -2007,6 +2165,7 @@ class AlexaCameraStreamController(AlexaCapability):
     """
 
     supported_locales = {
+        "ar-SA",
         "de-DE",
         "en-AU",
         "en-CA",
@@ -2014,6 +2173,9 @@ class AlexaCameraStreamController(AlexaCapability):
         "en-IN",
         "en-US",
         "es-ES",
+        "es-MX",
+        "es-US",
+        "fr-CA",
         "fr-FR",
         "hi-IN",
         "it-IT",

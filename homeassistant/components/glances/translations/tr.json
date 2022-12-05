@@ -9,19 +9,13 @@
         "step": {
             "user": {
                 "data": {
-                    "host": "Ana Bilgisayar",
+                    "host": "Sunucu",
                     "password": "Parola",
                     "port": "Port",
-                    "username": "Kullan\u0131c\u0131 Ad\u0131"
-                }
-            }
-        }
-    },
-    "options": {
-        "step": {
-            "init": {
-                "data": {
-                    "scan_interval": "G\u00fcncelleme s\u0131kl\u0131\u011f\u0131"
+                    "ssl": "SSL sertifikas\u0131 kullan\u0131r",
+                    "username": "Kullan\u0131c\u0131 Ad\u0131",
+                    "verify_ssl": "SSL sertifikas\u0131n\u0131 do\u011frulay\u0131n",
+                    "version": "Glances API S\u00fcr\u00fcm\u00fc (2 veya 3)"
                 }
             }
         }

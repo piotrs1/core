@@ -1,17 +1,17 @@
 """Test the bootstrapping."""
 # pylint: disable=protected-access
 import asyncio
+import glob
 import os
 from unittest.mock import Mock, patch
 
 import pytest
 
 from homeassistant import bootstrap, core, runner
-from homeassistant.bootstrap import SIGNAL_BOOTSTRAP_INTEGRATONS
 import homeassistant.config as config_util
+from homeassistant.const import SIGNAL_BOOTSTRAP_INTEGRATIONS
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-import homeassistant.util.dt as dt_util
 
 from tests.common import (
     MockModule,
@@ -22,7 +22,6 @@ from tests.common import (
     mock_integration,
 )
 
-ORIG_TIMEZONE = dt_util.DEFAULT_TIME_ZONE
 VERSION_PATH = os.path.join(get_test_config_dir(), config_util.VERSION_FILE)
 
 
@@ -55,13 +54,29 @@ async def test_home_assistant_core_config_validation(hass):
     assert result is None
 
 
-async def test_async_enable_logging(hass):
+async def test_async_enable_logging(hass, caplog):
     """Test to ensure logging is migrated to the queue handlers."""
     with patch("logging.getLogger"), patch(
         "homeassistant.bootstrap.async_activate_log_queue_handler"
-    ) as mock_async_activate_log_queue_handler:
+    ) as mock_async_activate_log_queue_handler, patch(
+        "homeassistant.bootstrap.logging.handlers.RotatingFileHandler.doRollover",
+        side_effect=OSError,
+    ):
         bootstrap.async_enable_logging(hass)
         mock_async_activate_log_queue_handler.assert_called_once()
+        mock_async_activate_log_queue_handler.reset_mock()
+        bootstrap.async_enable_logging(
+            hass,
+            log_rotate_days=5,
+            log_file="test.log",
+        )
+        mock_async_activate_log_queue_handler.assert_called_once()
+        for f in glob.glob("test.log*"):
+            os.remove(f)
+        for f in glob.glob("testing_config/home-assistant.log*"):
+            os.remove(f)
+
+    assert "Error rolling over log file" in caplog.text
 
 
 async def test_load_hassio(hass):
@@ -69,7 +84,7 @@ async def test_load_hassio(hass):
     with patch.dict(os.environ, {}, clear=True):
         assert bootstrap._get_domains(hass, {}) == set()
 
-    with patch.dict(os.environ, {"HASSIO": "1"}):
+    with patch.dict(os.environ, {"SUPERVISOR": "1"}):
         assert bootstrap._get_domains(hass, {}) == {"hassio"}
 
 
@@ -194,6 +209,82 @@ async def test_setup_after_deps_in_stage_1_ignored(hass):
     assert "normal_integration" in hass.config.components
     assert "cloud" in hass.config.components
     assert order == ["cloud", "an_after_dep", "normal_integration"]
+
+
+@pytest.mark.parametrize("load_registries", [False])
+async def test_setup_frontend_before_recorder(hass):
+    """Test frontend is setup before recorder."""
+    order = []
+
+    def gen_domain_setup(domain):
+        async def async_setup(hass, config):
+            order.append(domain)
+            return True
+
+        return async_setup
+
+    mock_integration(
+        hass,
+        MockModule(
+            domain="normal_integration",
+            async_setup=gen_domain_setup("normal_integration"),
+            partial_manifest={"after_dependencies": ["an_after_dep"]},
+        ),
+    )
+    mock_integration(
+        hass,
+        MockModule(
+            domain="an_after_dep",
+            async_setup=gen_domain_setup("an_after_dep"),
+        ),
+    )
+    mock_integration(
+        hass,
+        MockModule(
+            domain="frontend",
+            async_setup=gen_domain_setup("frontend"),
+            partial_manifest={
+                "dependencies": ["http"],
+                "after_dependencies": ["an_after_dep"],
+            },
+        ),
+    )
+    mock_integration(
+        hass,
+        MockModule(
+            domain="http",
+            async_setup=gen_domain_setup("http"),
+        ),
+    )
+    mock_integration(
+        hass,
+        MockModule(
+            domain="recorder",
+            async_setup=gen_domain_setup("recorder"),
+        ),
+    )
+
+    await bootstrap._async_set_up_integrations(
+        hass,
+        {
+            "frontend": {},
+            "http": {},
+            "recorder": {},
+            "normal_integration": {},
+            "an_after_dep": {},
+        },
+    )
+
+    assert "frontend" in hass.config.components
+    assert "normal_integration" in hass.config.components
+    assert "recorder" in hass.config.components
+    assert order == [
+        "http",
+        "frontend",
+        "recorder",
+        "an_after_dep",
+        "normal_integration",
+    ]
 
 
 @pytest.mark.parametrize("load_registries", [False])
@@ -369,7 +460,7 @@ async def test_setup_hass(
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
     caplog,
-    loop,
+    event_loop,
 ):
     """Test it works."""
     verbose = Mock()
@@ -410,6 +501,8 @@ async def test_setup_hass(
     assert len(mock_ensure_config_exists.mock_calls) == 1
     assert len(mock_process_ha_config_upgrade.mock_calls) == 1
 
+    assert hass == core.async_get_hass()
+
 
 async def test_setup_hass_takes_longer_than_log_slow_startup(
     mock_enable_logging,
@@ -418,7 +511,7 @@ async def test_setup_hass_takes_longer_than_log_slow_startup(
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
     caplog,
-    loop,
+    event_loop,
 ):
     """Test it works."""
     verbose = Mock()
@@ -460,7 +553,7 @@ async def test_setup_hass_invalid_yaml(
     mock_mount_local_lib_path,
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
-    loop,
+    event_loop,
 ):
     """Test it works."""
     with patch(
@@ -488,7 +581,7 @@ async def test_setup_hass_config_dir_nonexistent(
     mock_mount_local_lib_path,
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
-    loop,
+    event_loop,
 ):
     """Test it works."""
     mock_ensure_config_exists.return_value = False
@@ -515,7 +608,7 @@ async def test_setup_hass_safe_mode(
     mock_mount_local_lib_path,
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
-    loop,
+    event_loop,
 ):
     """Test it works."""
     with patch("homeassistant.components.browser.setup") as browser_setup, patch(
@@ -548,7 +641,7 @@ async def test_setup_hass_invalid_core_config(
     mock_mount_local_lib_path,
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
-    loop,
+    event_loop,
 ):
     """Test it works."""
     with patch(
@@ -576,7 +669,7 @@ async def test_setup_safe_mode_if_no_frontend(
     mock_mount_local_lib_path,
     mock_ensure_config_exists,
     mock_process_ha_config_upgrade,
-    loop,
+    event_loop,
 ):
     """Test we setup safe mode if frontend didn't load."""
     verbose = Mock()
@@ -655,12 +748,13 @@ async def test_empty_integrations_list_is_only_sent_at_the_end_of_bootstrap(hass
         integrations.append(data)
 
     async_dispatcher_connect(
-        hass, SIGNAL_BOOTSTRAP_INTEGRATONS, _bootstrap_integrations
+        hass, SIGNAL_BOOTSTRAP_INTEGRATIONS, _bootstrap_integrations
     )
     with patch.object(bootstrap, "SLOW_STARTUP_CHECK_INTERVAL", 0.05):
         await bootstrap._async_set_up_integrations(
             hass, {"normal_integration": {}, "an_after_dep": {}}
         )
+        await hass.async_block_till_done()
 
     assert integrations[0] != {}
     assert "an_after_dep" in integrations[0]
@@ -669,3 +763,35 @@ async def test_empty_integrations_list_is_only_sent_at_the_end_of_bootstrap(hass
 
     assert "normal_integration" in hass.config.components
     assert order == ["an_after_dep", "normal_integration"]
+
+
+@pytest.mark.parametrize("load_registries", [False])
+async def test_warning_logged_on_wrap_up_timeout(hass, caplog):
+    """Test we log a warning on bootstrap timeout."""
+
+    def gen_domain_setup(domain):
+        async def async_setup(hass, config):
+            await asyncio.sleep(0.1)
+
+            async def _background_task():
+                await asyncio.sleep(0.2)
+
+            await hass.async_create_task(_background_task())
+            return True
+
+        return async_setup
+
+    mock_integration(
+        hass,
+        MockModule(
+            domain="normal_integration",
+            async_setup=gen_domain_setup("normal_integration"),
+            partial_manifest={},
+        ),
+    )
+
+    with patch.object(bootstrap, "WRAP_UP_TIMEOUT", 0):
+        await bootstrap._async_set_up_integrations(hass, {"normal_integration": {}})
+        await hass.async_block_till_done()
+
+    assert "Setup timed out for bootstrap - moving forward" in caplog.text

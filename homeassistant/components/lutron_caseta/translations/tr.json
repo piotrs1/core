@@ -8,8 +8,12 @@
         "error": {
             "cannot_connect": "Ba\u011flanma hatas\u0131"
         },
-        "flow_title": "Lutron Cas\u00e9ta {name} ( {host} )",
+        "flow_title": "{name} ({host})",
         "step": {
+            "import_failed": {
+                "description": "Configuration.yaml'den i\u00e7e aktar\u0131lan k\u00f6pr\u00fc (ana bilgisayar: {host}) kurulamad\u0131.",
+                "title": "Cas\u00e9ta k\u00f6pr\u00fc yap\u0131land\u0131rmas\u0131 i\u00e7e aktar\u0131lamad\u0131."
+            },
             "link": {
                 "description": "{name} ( {host} ) ile e\u015fle\u015ftirmek i\u00e7in, bu formu g\u00f6nderdikten sonra k\u00f6pr\u00fcn\u00fcn arkas\u0131ndaki siyah d\u00fc\u011fmeye bas\u0131n.",
                 "title": "K\u00f6pr\u00fc ile e\u015fle\u015ftirin"
@@ -29,6 +33,9 @@
             "button_2": "\u0130kinci d\u00fc\u011fme",
             "button_3": "\u00dc\u00e7\u00fcnc\u00fc d\u00fc\u011fme",
             "button_4": "D\u00f6rd\u00fcnc\u00fc d\u00fc\u011fme",
+            "button_5": "Be\u015finci d\u00fc\u011fme",
+            "button_6": "Alt\u0131nc\u0131 d\u00fc\u011fme",
+            "button_7": "Yedinci d\u00fc\u011fme",
             "close_1": "Kapat 1",
             "close_2": "Kapat 2",
             "close_3": "Kapat 3",

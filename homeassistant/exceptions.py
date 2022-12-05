@@ -25,9 +25,12 @@ class NoEntitySpecifiedError(HomeAssistantError):
 class TemplateError(HomeAssistantError):
     """Error during template rendering."""
 
-    def __init__(self, exception: Exception) -> None:
+    def __init__(self, exception: Exception | str) -> None:
         """Init the error."""
-        super().__init__(f"{exception.__class__.__name__}: {exception}")
+        if isinstance(exception, str):
+            super().__init__(exception)
+        else:
+            super().__init__(f"{exception.__class__.__name__}: {exception}")
 
 
 @attr.s
@@ -42,7 +45,7 @@ class ConditionError(HomeAssistantError):
         """Return indentation."""
         return "  " * indent + message
 
-    def output(self, indent: int) -> Generator:
+    def output(self, indent: int) -> Generator[str, None, None]:
         """Yield an indented representation."""
         raise NotImplementedError()
 
@@ -58,7 +61,7 @@ class ConditionErrorMessage(ConditionError):
     # A message describing this error
     message: str = attr.ib()
 
-    def output(self, indent: int) -> Generator:
+    def output(self, indent: int) -> Generator[str, None, None]:
         """Yield an indented representation."""
         yield self._indent(indent, f"In '{self.type}' condition: {self.message}")
 
@@ -74,7 +77,7 @@ class ConditionErrorIndex(ConditionError):
     # The error that this error wraps
     error: ConditionError = attr.ib()
 
-    def output(self, indent: int) -> Generator:
+    def output(self, indent: int) -> Generator[str, None, None]:
         """Yield an indented representation."""
         if self.total > 1:
             yield self._indent(
@@ -93,7 +96,7 @@ class ConditionErrorContainer(ConditionError):
     # List of ConditionErrors that this error wraps
     errors: Sequence[ConditionError] = attr.ib()
 
-    def output(self, indent: int) -> Generator:
+    def output(self, indent: int) -> Generator[str, None, None]:
         """Yield an indented representation."""
         for item in self.errors:
             yield from item.output(indent)
@@ -109,6 +112,10 @@ class IntegrationError(HomeAssistantError):
 
 class PlatformNotReady(IntegrationError):
     """Error to indicate that platform is not ready."""
+
+
+class ConfigEntryError(IntegrationError):
+    """Error to indicate that config entry setup has failed."""
 
 
 class ConfigEntryNotReady(IntegrationError):
@@ -199,3 +206,15 @@ class RequiredParameterMissing(HomeAssistantError):
             ),
         )
         self.parameter_names = parameter_names
+
+
+class DependencyError(HomeAssistantError):
+    """Raised when dependencies can not be setup."""
+
+    def __init__(self, failed_dependencies: list[str]) -> None:
+        """Initialize error."""
+        super().__init__(
+            self,
+            f"Could not setup dependencies: {', '.join(failed_dependencies)}",
+        )
+        self.failed_dependencies = failed_dependencies

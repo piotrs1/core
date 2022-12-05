@@ -1,7 +1,7 @@
 """Constants used by the Withings component."""
 from enum import Enum
 
-import homeassistant.const as const
+from homeassistant import const
 
 CONF_PROFILES = "profiles"
 CONF_USE_WEBHOOK = "use_webhook"
@@ -13,7 +13,6 @@ DOMAIN = "withings"
 LOG_NAMESPACE = "homeassistant.components.withings"
 PROFILE = "profile"
 PUSH_HANDLER = "push_handler"
-CONF_WEBHOOK_URL = "webhook_url"
 
 
 class Measurement(Enum):

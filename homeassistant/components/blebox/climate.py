@@ -1,34 +1,47 @@
 """BleBox climate entity."""
+from datetime import timedelta
+from typing import Any
 
-from homeassistant.components.climate import ClimateEntity
-from homeassistant.components.climate.const import (
-    CURRENT_HVAC_HEAT,
-    CURRENT_HVAC_IDLE,
-    CURRENT_HVAC_OFF,
-    HVAC_MODE_HEAT,
-    HVAC_MODE_OFF,
-    SUPPORT_TARGET_TEMPERATURE,
+from blebox_uniapi.box import Box
+import blebox_uniapi.climate
+
+from homeassistant.components.climate import (
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACAction,
+    HVACMode,
 )
-from homeassistant.const import ATTR_TEMPERATURE, TEMP_CELSIUS
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from . import BleBoxEntity, create_blebox_entities
+from . import BleBoxEntity
+from .const import DOMAIN, PRODUCT
+
+SCAN_INTERVAL = timedelta(seconds=5)
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up a BleBox climate entity."""
+    product: Box = hass.data[DOMAIN][config_entry.entry_id][PRODUCT]
 
-    create_blebox_entities(
-        hass, config_entry, async_add_entities, BleBoxClimateEntity, "climates"
-    )
+    entities = [
+        BleBoxClimateEntity(feature) for feature in product.features.get("climates", [])
+    ]
+    async_add_entities(entities, True)
 
 
-class BleBoxClimateEntity(BleBoxEntity, ClimateEntity):
+class BleBoxClimateEntity(BleBoxEntity[blebox_uniapi.climate.Climate], ClimateEntity):
     """Representation of a BleBox climate feature (saunaBox)."""
 
-    @property
-    def supported_features(self):
-        """Return the supported climate features."""
-        return SUPPORT_TARGET_TEMPERATURE
+    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
+    _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
     @property
     def hvac_mode(self):
@@ -36,27 +49,16 @@ class BleBoxClimateEntity(BleBoxEntity, ClimateEntity):
         if self._feature.is_on is None:
             return None
 
-        return HVAC_MODE_HEAT if self._feature.is_on else HVAC_MODE_OFF
+        return HVACMode.HEAT if self._feature.is_on else HVACMode.OFF
 
     @property
     def hvac_action(self):
         """Return the actual current HVAC action."""
-        is_on = self._feature.is_on
-        if not is_on:
-            return None if is_on is None else CURRENT_HVAC_OFF
+        if not (is_on := self._feature.is_on):
+            return None if is_on is None else HVACAction.OFF
 
         # NOTE: In practice, there's no need to handle case when is_heating is None
-        return CURRENT_HVAC_HEAT if self._feature.is_heating else CURRENT_HVAC_IDLE
-
-    @property
-    def hvac_modes(self):
-        """Return a list of possible HVAC modes."""
-        return [HVAC_MODE_OFF, HVAC_MODE_HEAT]
-
-    @property
-    def temperature_unit(self):
-        """Return the temperature unit."""
-        return TEMP_CELSIUS
+        return HVACAction.HEATING if self._feature.is_heating else HVACAction.IDLE
 
     @property
     def max_temp(self):
@@ -78,15 +80,15 @@ class BleBoxClimateEntity(BleBoxEntity, ClimateEntity):
         """Return the desired thermostat temperature."""
         return self._feature.desired
 
-    async def async_set_hvac_mode(self, hvac_mode):
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set the climate entity mode."""
-        if hvac_mode == HVAC_MODE_HEAT:
+        if hvac_mode == HVACMode.HEAT:
             await self._feature.async_on()
             return
 
         await self._feature.async_off()
 
-    async def async_set_temperature(self, **kwargs):
+    async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set the thermostat temperature."""
         value = kwargs[ATTR_TEMPERATURE]
         await self._feature.async_set_temperature(value)

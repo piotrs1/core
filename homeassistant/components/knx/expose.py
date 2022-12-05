@@ -1,11 +1,13 @@
 """Exposures to KNX bus."""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
+import logging
 
 from xknx import XKNX
 from xknx.devices import DateTime, ExposeSensor
-from xknx.dpt import DPTNumeric
+from xknx.dpt import DPTNumeric, DPTString
+from xknx.exceptions import ConversionError
 from xknx.remote_value import RemoteValueSensor
 
 from homeassistant.const import (
@@ -21,6 +23,8 @@ from homeassistant.helpers.typing import ConfigType, StateType
 
 from .const import KNX_ADDRESS
 from .schema import ExposeSchema
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @callback
@@ -100,10 +104,11 @@ class KNXExposeSensor:
     def _init_expose_state(self) -> None:
         """Initialize state of the exposure."""
         init_state = self.hass.states.get(self.entity_id)
-        init_value = self._get_expose_value(init_state)
-        self.device.sensor_value.value = (
-            init_value if init_value is not None else self.expose_default
-        )
+        state_value = self._get_expose_value(init_state)
+        try:
+            self.device.sensor_value.value = state_value
+        except ConversionError:
+            _LOGGER.exception("Error during sending of expose sensor value")
 
     @callback
     def shutdown(self) -> None:
@@ -116,12 +121,13 @@ class KNXExposeSensor:
     def _get_expose_value(self, state: State | None) -> StateType:
         """Extract value from state."""
         if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            return None
-        value = (
-            state.state
-            if self.expose_attribute is None
-            else state.attributes.get(self.expose_attribute)
-        )
+            value = self.expose_default
+        else:
+            value = (
+                state.state
+                if self.expose_attribute is None
+                else state.attributes.get(self.expose_attribute, self.expose_default)
+            )
         if self.type == "binary":
             if value in (1, STATE_ON, "True"):
                 return True
@@ -133,27 +139,33 @@ class KNXExposeSensor:
             and issubclass(self.device.sensor_value.dpt_class, DPTNumeric)
         ):
             return float(value)
+        if (
+            value is not None
+            and isinstance(self.device.sensor_value, RemoteValueSensor)
+            and issubclass(self.device.sensor_value.dpt_class, DPTString)
+        ):
+            # DPT 16.000 only allows up to 14 Bytes
+            return str(value)[:14]
         return value
 
     async def _async_entity_changed(self, event: Event) -> None:
         """Handle entity change."""
         new_state = event.data.get("new_state")
-        new_value = self._get_expose_value(new_state)
-        if new_value is None:
+        if (new_value := self._get_expose_value(new_state)) is None:
             return
         old_state = event.data.get("old_state")
-        old_value = self._get_expose_value(old_state)
+        # don't use default value for comparison on first state change (old_state is None)
+        old_value = self._get_expose_value(old_state) if old_state is not None else None
         # don't send same value sequentially
         if new_value != old_value:
             await self._async_set_knx_value(new_value)
 
     async def _async_set_knx_value(self, value: StateType) -> None:
         """Set new value on xknx ExposeSensor."""
-        if value is None:
-            if self.expose_default is None:
-                return
-            value = self.expose_default
-        await self.device.set(value)
+        try:
+            await self.device.set(value)
+        except ConversionError:
+            _LOGGER.exception("Error during sending of expose sensor value")
 
 
 class KNXExposeTime:

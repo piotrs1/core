@@ -1,19 +1,29 @@
 """Support for the Nettigo Air Monitor service."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from typing import cast
 
 from homeassistant.components.sensor import (
-    ATTR_STATE_CLASS,
     DOMAIN as PLATFORM,
+    SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_DEVICE_CLASS, ATTR_ICON
+from homeassistant.const import (
+    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+    CONCENTRATION_PARTS_PER_MILLION,
+    PERCENTAGE,
+    PRESSURE_HPA,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+    TEMP_CELSIUS,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import StateType
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -21,18 +31,263 @@ from homeassistant.util.dt import utcnow
 
 from . import NAMDataUpdateCoordinator
 from .const import (
-    ATTR_ENABLED,
-    ATTR_LABEL,
-    ATTR_UNIT,
+    ATTR_BME280_HUMIDITY,
+    ATTR_BME280_PRESSURE,
+    ATTR_BME280_TEMPERATURE,
+    ATTR_BMP180_PRESSURE,
+    ATTR_BMP180_TEMPERATURE,
+    ATTR_BMP280_PRESSURE,
+    ATTR_BMP280_TEMPERATURE,
+    ATTR_DHT22_HUMIDITY,
+    ATTR_DHT22_TEMPERATURE,
+    ATTR_HECA_HUMIDITY,
+    ATTR_HECA_TEMPERATURE,
+    ATTR_MHZ14A_CARBON_DIOXIDE,
+    ATTR_PMSX003_CAQI,
+    ATTR_PMSX003_CAQI_LEVEL,
+    ATTR_PMSX003_P0,
+    ATTR_PMSX003_P1,
+    ATTR_PMSX003_P2,
+    ATTR_SDS011_CAQI,
+    ATTR_SDS011_CAQI_LEVEL,
+    ATTR_SDS011_P1,
+    ATTR_SDS011_P2,
+    ATTR_SHT3X_HUMIDITY,
+    ATTR_SHT3X_TEMPERATURE,
+    ATTR_SIGNAL_STRENGTH,
+    ATTR_SPS30_CAQI,
+    ATTR_SPS30_CAQI_LEVEL,
+    ATTR_SPS30_P0,
+    ATTR_SPS30_P1,
+    ATTR_SPS30_P2,
+    ATTR_SPS30_P4,
     ATTR_UPTIME,
     DOMAIN,
     MIGRATION_SENSORS,
-    SENSORS,
 )
 
 PARALLEL_UPDATES = 1
 
 _LOGGER = logging.getLogger(__name__)
+
+SENSORS: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key=ATTR_BME280_HUMIDITY,
+        name="BME280 humidity",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_BME280_PRESSURE,
+        name="BME280 pressure",
+        native_unit_of_measurement=PRESSURE_HPA,
+        device_class=SensorDeviceClass.PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_BME280_TEMPERATURE,
+        name="BME280 temperature",
+        native_unit_of_measurement=TEMP_CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_BMP180_PRESSURE,
+        name="BMP180 pressure",
+        native_unit_of_measurement=PRESSURE_HPA,
+        device_class=SensorDeviceClass.PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_BMP180_TEMPERATURE,
+        name="BMP180 temperature",
+        native_unit_of_measurement=TEMP_CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_BMP280_PRESSURE,
+        name="BMP280 pressure",
+        native_unit_of_measurement=PRESSURE_HPA,
+        device_class=SensorDeviceClass.PRESSURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_BMP280_TEMPERATURE,
+        name="BMP280 temperature",
+        native_unit_of_measurement=TEMP_CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_HECA_HUMIDITY,
+        name="HECA humidity",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_HECA_TEMPERATURE,
+        name="HECA temperature",
+        native_unit_of_measurement=TEMP_CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_MHZ14A_CARBON_DIOXIDE,
+        name="MH-Z14A carbon dioxide",
+        native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+        device_class=SensorDeviceClass.CO2,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_PMSX003_CAQI,
+        name="PMSx003 CAQI",
+        icon="mdi:air-filter",
+    ),
+    SensorEntityDescription(
+        key=ATTR_PMSX003_CAQI_LEVEL,
+        name="PMSx003 CAQI level",
+        icon="mdi:air-filter",
+        device_class=SensorDeviceClass.ENUM,
+        options=["very low", "low", "medium", "high", "very high"],
+        translation_key="caqi_level",
+    ),
+    SensorEntityDescription(
+        key=ATTR_PMSX003_P0,
+        name="PMSx003 particulate matter 1.0",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM1,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_PMSX003_P1,
+        name="PMSx003 particulate matter 10",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM10,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_PMSX003_P2,
+        name="PMSx003 particulate matter 2.5",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM25,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SDS011_CAQI,
+        name="SDS011 CAQI",
+        icon="mdi:air-filter",
+    ),
+    SensorEntityDescription(
+        key=ATTR_SDS011_CAQI_LEVEL,
+        name="SDS011 CAQI level",
+        icon="mdi:air-filter",
+        device_class=SensorDeviceClass.ENUM,
+        options=["very low", "low", "medium", "high", "very high"],
+        translation_key="caqi_level",
+    ),
+    SensorEntityDescription(
+        key=ATTR_SDS011_P1,
+        name="SDS011 particulate matter 10",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM10,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SDS011_P2,
+        name="SDS011 particulate matter 2.5",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM25,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SHT3X_HUMIDITY,
+        name="SHT3X humidity",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SHT3X_TEMPERATURE,
+        name="SHT3X temperature",
+        native_unit_of_measurement=TEMP_CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SPS30_CAQI,
+        name="SPS30 CAQI",
+        icon="mdi:air-filter",
+    ),
+    SensorEntityDescription(
+        key=ATTR_SPS30_CAQI_LEVEL,
+        name="SPS30 CAQI level",
+        icon="mdi:air-filter",
+        device_class=SensorDeviceClass.ENUM,
+        options=["very low", "low", "medium", "high", "very high"],
+        translation_key="caqi_level",
+    ),
+    SensorEntityDescription(
+        key=ATTR_SPS30_P0,
+        name="SPS30 particulate matter 1.0",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM1,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SPS30_P1,
+        name="SPS30 particulate matter 10",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM10,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SPS30_P2,
+        name="SPS30 particulate matter 2.5",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        device_class=SensorDeviceClass.PM25,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SPS30_P4,
+        name="SPS30 particulate matter 4.0",
+        native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+        icon="mdi:molecule",
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_DHT22_HUMIDITY,
+        name="DHT22 humidity",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.HUMIDITY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_DHT22_TEMPERATURE,
+        name="DHT22 temperature",
+        native_unit_of_measurement=TEMP_CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key=ATTR_SIGNAL_STRENGTH,
+        name="Signal strength",
+        native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        entity_registry_enabled_default=False,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SensorEntityDescription(
+        key=ATTR_UPTIME,
+        name="Uptime",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_registry_enabled_default=False,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
 
 
 async def async_setup_entry(
@@ -57,39 +312,38 @@ async def async_setup_entry(
             ent_reg.async_update_entity(entity_id, new_unique_id=new_unique_id)
 
     sensors: list[NAMSensor | NAMSensorUptime] = []
-    for sensor in SENSORS:
-        if getattr(coordinator.data, sensor) is not None:
-            if sensor == ATTR_UPTIME:
-                sensors.append(NAMSensorUptime(coordinator, sensor))
+    for description in SENSORS:
+        if getattr(coordinator.data, description.key) is not None:
+            if description.key == ATTR_UPTIME:
+                sensors.append(NAMSensorUptime(coordinator, description))
             else:
-                sensors.append(NAMSensor(coordinator, sensor))
+                sensors.append(NAMSensor(coordinator, description))
 
     async_add_entities(sensors, False)
 
 
-class NAMSensor(CoordinatorEntity, SensorEntity):
+class NAMSensor(CoordinatorEntity[NAMDataUpdateCoordinator], SensorEntity):
     """Define an Nettigo Air Monitor sensor."""
 
-    coordinator: NAMDataUpdateCoordinator
+    _attr_has_entity_name = True
 
-    def __init__(self, coordinator: NAMDataUpdateCoordinator, sensor_type: str) -> None:
+    def __init__(
+        self,
+        coordinator: NAMDataUpdateCoordinator,
+        description: SensorEntityDescription,
+    ) -> None:
         """Initialize."""
         super().__init__(coordinator)
-        description = SENSORS[sensor_type]
-        self._attr_device_class = description[ATTR_DEVICE_CLASS]
         self._attr_device_info = coordinator.device_info
-        self._attr_entity_registry_enabled_default = description[ATTR_ENABLED]
-        self._attr_icon = description[ATTR_ICON]
-        self._attr_name = description[ATTR_LABEL]
-        self._attr_state_class = description[ATTR_STATE_CLASS]
-        self._attr_unique_id = f"{coordinator.unique_id}-{sensor_type}"
-        self._attr_unit_of_measurement = description[ATTR_UNIT]
-        self.sensor_type = sensor_type
+        self._attr_unique_id = f"{coordinator.unique_id}-{description.key}"
+        self.entity_description = description
 
     @property
-    def state(self) -> StateType:
+    def native_value(self) -> StateType | datetime:
         """Return the state."""
-        return cast(StateType, getattr(self.coordinator.data, self.sensor_type))
+        return cast(
+            StateType, getattr(self.coordinator.data, self.entity_description.key)
+        )
 
     @property
     def available(self) -> bool:
@@ -100,7 +354,8 @@ class NAMSensor(CoordinatorEntity, SensorEntity):
         # sensors. For this reason, we mark entities for which data is missing as
         # unavailable.
         return (
-            available and getattr(self.coordinator.data, self.sensor_type) is not None
+            available
+            and getattr(self.coordinator.data, self.entity_description.key) is not None
         )
 
 
@@ -108,11 +363,7 @@ class NAMSensorUptime(NAMSensor):
     """Define an Nettigo Air Monitor uptime sensor."""
 
     @property
-    def state(self) -> str:
+    def native_value(self) -> datetime:
         """Return the state."""
-        uptime_sec = getattr(self.coordinator.data, self.sensor_type)
-        return (
-            (utcnow() - timedelta(seconds=uptime_sec))
-            .replace(microsecond=0)
-            .isoformat()
-        )
+        uptime_sec = getattr(self.coordinator.data, self.entity_description.key)
+        return utcnow() - timedelta(seconds=uptime_sec)

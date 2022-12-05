@@ -6,9 +6,11 @@ from contextlib import suppress
 from transmissionrpc.torrent import Torrent
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, DATA_RATE_MEGABYTES_PER_SECOND, STATE_IDLE
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import TransmissionClient
 from .const import (
@@ -20,7 +22,11 @@ from .const import (
 )
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up the Transmission sensors."""
 
     tm_client = hass.data[DOMAIN][config_entry.entry_id]
@@ -43,6 +49,8 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class TransmissionSensor(SensorEntity):
     """A base class for all Transmission sensors."""
 
+    _attr_should_poll = False
+
     def __init__(self, tm_client, client_name, sensor_name, sub_type=None):
         """Initialize the sensor."""
         self._tm_client: TransmissionClient = tm_client
@@ -62,21 +70,16 @@ class TransmissionSensor(SensorEntity):
         return f"{self._tm_client.api.host}-{self.name}"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the state of the sensor."""
         return self._state
 
     @property
-    def should_poll(self):
-        """Return the polling requirement for this sensor."""
-        return False
-
-    @property
-    def available(self):
+    def available(self) -> bool:
         """Could the device be accessed during the last update call."""
         return self._tm_client.api.available
 
-    async def async_added_to_hass(self):
+    async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
 
         @callback
@@ -95,14 +98,13 @@ class TransmissionSpeedSensor(TransmissionSensor):
     """Representation of a Transmission speed sensor."""
 
     @property
-    def unit_of_measurement(self):
+    def native_unit_of_measurement(self):
         """Return the unit of measurement of this entity, if any."""
         return DATA_RATE_MEGABYTES_PER_SECOND
 
-    def update(self):
+    def update(self) -> None:
         """Get the latest data from Transmission and updates the state."""
-        data = self._tm_client.api.data
-        if data:
+        if data := self._tm_client.api.data:
             mb_spd = (
                 float(data.downloadSpeed)
                 if self._sub_type == "download"
@@ -115,10 +117,9 @@ class TransmissionSpeedSensor(TransmissionSensor):
 class TransmissionStatusSensor(TransmissionSensor):
     """Representation of a Transmission status sensor."""
 
-    def update(self):
+    def update(self) -> None:
         """Get the latest data from Transmission and updates the state."""
-        data = self._tm_client.api.data
-        if data:
+        if data := self._tm_client.api.data:
             upload = data.uploadSpeed
             download = data.downloadSpeed
             if upload > 0 and download > 0:
@@ -145,7 +146,7 @@ class TransmissionTorrentsSensor(TransmissionSensor):
     }
 
     @property
-    def unit_of_measurement(self):
+    def native_unit_of_measurement(self):
         """Return the unit of measurement of this entity, if any."""
         return "Torrents"
 
@@ -162,7 +163,7 @@ class TransmissionTorrentsSensor(TransmissionSensor):
             STATE_ATTR_TORRENT_INFO: info,
         }
 
-    def update(self):
+    def update(self) -> None:
         """Get the latest data from Transmission and updates the state."""
         torrents = _filter_torrents(
             self._tm_client.api.torrents, statuses=self.SUBTYPE_MODES[self._sub_type]

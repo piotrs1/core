@@ -9,11 +9,24 @@
             "unknown": "Unerwarteter Fehler"
         },
         "step": {
-            "user": {
+            "cloud": {
                 "data": {
                     "password": "Passwort",
                     "pin": "PIN-Code",
                     "username": "Benutzername"
+                }
+            },
+            "local": {
+                "data": {
+                    "host": "Host",
+                    "pin": "PIN-Code",
+                    "port": "Port"
+                }
+            },
+            "user": {
+                "menu_options": {
+                    "cloud": "Risco Cloud (empfohlen)",
+                    "local": "Lokales Risco Panel (fortgeschritten)"
                 }
             }
         }
@@ -44,7 +57,7 @@
                     "B": "Gruppe B",
                     "C": "Gruppe C",
                     "D": "Gruppe D",
-                    "arm": "Aktiv, abwesend",
+                    "arm": "Aktiv (abwesend)",
                     "partial_arm": "Teilweise aktiv (STAY)"
                 },
                 "description": "W\u00e4hle aus, welchen Zustand dein Home Assistant-Alarm f\u00fcr jeden von Risco gemeldeten Zustand melden soll",

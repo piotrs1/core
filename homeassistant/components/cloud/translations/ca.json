@@ -1,4 +1,9 @@
 {
+    "issues": {
+        "legacy_subscription": {
+            "title": "S'ha detectat una subscripci\u00f3 heretada"
+        }
+    },
     "system_health": {
         "info": {
             "alexa_enabled": "Alexa activada",
@@ -10,6 +15,7 @@
             "relayer_connected": "Encaminador connectat",
             "remote_connected": "Connexi\u00f3 remota establerta",
             "remote_enabled": "Connexi\u00f3 remota activada",
+            "remote_server": "Servidor remot",
             "subscription_expiration": "Caducitat de la subscripci\u00f3"
         }
     }

@@ -13,7 +13,7 @@ async def test_form(hass):
     result = await hass.config_entries.flow.async_init(
         SRP_ENERGY_DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_FORM
+    assert result["type"] == data_entry_flow.FlowResultType.FORM
     assert result["step_id"] == "user"
     assert result["errors"] == {}
 
@@ -93,13 +93,21 @@ async def test_form_unknown_exception(hass):
 
 async def test_config(hass):
     """Test handling of configuration imported."""
-    with patch("homeassistant.components.srp_energy.config_flow.SrpEnergyClient"):
+    with patch(
+        "homeassistant.components.srp_energy.config_flow.SrpEnergyClient"
+    ), patch(
+        "homeassistant.components.srp_energy.async_setup_entry",
+        return_value=True,
+    ) as mock_setup_entry:
         result = await hass.config_entries.flow.async_init(
             SRP_ENERGY_DOMAIN,
             context={"source": config_entries.SOURCE_IMPORT},
             data=ENTRY_CONFIG,
         )
-        assert result["type"] == data_entry_flow.RESULT_TYPE_CREATE_ENTRY
+        assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+        await hass.async_block_till_done()
+
+    assert len(mock_setup_entry.mock_calls) == 1
 
 
 async def test_integration_already_configured(hass):
@@ -108,5 +116,5 @@ async def test_integration_already_configured(hass):
     result = await hass.config_entries.flow.async_init(
         SRP_ENERGY_DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    assert result["type"] == data_entry_flow.RESULT_TYPE_ABORT
+    assert result["type"] == data_entry_flow.FlowResultType.ABORT
     assert result["reason"] == "single_instance_allowed"

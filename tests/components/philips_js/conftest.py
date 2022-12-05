@@ -4,7 +4,6 @@ from unittest.mock import create_autospec, patch
 from haphilipsjs import PhilipsTV
 from pytest import fixture
 
-from homeassistant import setup
 from homeassistant.components.philips_js.const import DOMAIN
 
 from . import MOCK_CONFIG, MOCK_ENTITY_ID, MOCK_NAME, MOCK_SERIAL_NO, MOCK_SYSTEM
@@ -15,7 +14,6 @@ from tests.common import MockConfigEntry, mock_device_registry
 @fixture(autouse=True)
 async def setup_notification(hass):
     """Configure notification system."""
-    await setup.async_setup_component(hass, "persistent_notification", {})
 
 
 @fixture(autouse=True)
@@ -33,6 +31,10 @@ def mock_tv():
     tv.notify_change_supported = False
     tv.pairing_type = None
     tv.powerstate = None
+    tv.source_id = None
+    tv.ambilight_current_configuration = None
+    tv.ambilight_styles = {}
+    tv.ambilight_cached = {}
 
     with patch(
         "homeassistant.components.philips_js.config_flow.PhilipsTV", return_value=tv
@@ -43,7 +45,9 @@ def mock_tv():
 @fixture
 async def mock_config_entry(hass):
     """Get standard player."""
-    config_entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG, title=MOCK_NAME)
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=MOCK_CONFIG, title=MOCK_NAME, unique_id=MOCK_SERIAL_NO
+    )
     config_entry.add_to_hass(hass)
     return config_entry
 

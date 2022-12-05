@@ -1,15 +1,21 @@
 """Handle intents with scripts."""
 import copy
+import logging
 
 import voluptuous as vol
 
 from homeassistant.const import CONF_TYPE
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, intent, script, template
+from homeassistant.helpers.typing import ConfigType
+
+_LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "intent_script"
 
 CONF_INTENTS = "intents"
 CONF_SPEECH = "speech"
+CONF_REPROMPT = "reprompt"
 
 CONF_ACTION = "action"
 CONF_CARD = "card"
@@ -37,6 +43,10 @@ CONFIG_SCHEMA = vol.Schema(
                     vol.Optional(CONF_TYPE, default="plain"): cv.string,
                     vol.Required(CONF_TEXT): cv.template,
                 },
+                vol.Optional(CONF_REPROMPT): {
+                    vol.Optional(CONF_TYPE, default="plain"): cv.string,
+                    vol.Required(CONF_TEXT): cv.template,
+                },
             }
         }
     },
@@ -44,7 +54,7 @@ CONFIG_SCHEMA = vol.Schema(
 )
 
 
-async def async_setup(hass, config):
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Activate Alexa component."""
     intents = copy.deepcopy(config[DOMAIN])
     template.attach(hass, intents)
@@ -70,10 +80,21 @@ class ScriptIntentHandler(intent.IntentHandler):
     async def async_handle(self, intent_obj):
         """Handle the intent."""
         speech = self.config.get(CONF_SPEECH)
+        reprompt = self.config.get(CONF_REPROMPT)
         card = self.config.get(CONF_CARD)
         action = self.config.get(CONF_ACTION)
         is_async_action = self.config.get(CONF_ASYNC_ACTION)
         slots = {key: value["value"] for key, value in intent_obj.slots.items()}
+
+        _LOGGER.debug(
+            "Intent named %s received with slots: %s",
+            intent_obj.intent_type,
+            {
+                key: value
+                for key, value in slots.items()
+                if not key.startswith("_") and not key.endswith("_raw_value")
+            },
+        )
 
         if action is not None:
             if is_async_action:
@@ -90,6 +111,14 @@ class ScriptIntentHandler(intent.IntentHandler):
                 speech[CONF_TEXT].async_render(slots, parse_result=False),
                 speech[CONF_TYPE],
             )
+
+        if reprompt is not None:
+            text_reprompt = reprompt[CONF_TEXT].async_render(slots, parse_result=False)
+            if text_reprompt:
+                response.async_set_reprompt(
+                    text_reprompt,
+                    reprompt[CONF_TYPE],
+                )
 
         if card is not None:
             response.async_set_card(

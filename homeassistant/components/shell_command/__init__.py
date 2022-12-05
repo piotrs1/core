@@ -43,7 +43,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             cache[cmd] = prog, args, args_compiled
         else:
             prog, args = cmd.split(" ", 1)
-            args_compiled = template.Template(args, hass)
+            args_compiled = template.Template(str(args), hass)
             cache[cmd] = prog, args, args_compiled
 
         if args_compiled:
@@ -60,8 +60,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         if rendered_args == args:
             # No template used. default behavior
 
-            # pylint: disable=no-member
-            create_process = asyncio.subprocess.create_subprocess_shell(
+            create_process = asyncio.create_subprocess_shell(
                 cmd,
                 stdin=None,
                 stdout=asyncio.subprocess.PIPE,
@@ -72,8 +71,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             # (which uses shell=False) for security
             shlexed_cmd = [prog] + shlex.split(rendered_args)
 
-            # pylint: disable=no-member
-            create_process = asyncio.subprocess.create_subprocess_exec(
+            create_process = asyncio.create_subprocess_exec(
                 *shlexed_cmd,
                 stdin=None,
                 stdout=asyncio.subprocess.PIPE,

@@ -22,6 +22,7 @@ import homeassistant.helpers.config_validation as cv
 
 from .const import (
     CONF_CAT,
+    CONF_DEV_PATH,
     CONF_DIM_STEPS,
     CONF_FIRMWARE,
     CONF_HOUSECODE,
@@ -40,6 +41,7 @@ from .const import (
     CONF_X10_ALL_UNITS_OFF,
     DOMAIN,
     HOUSECODES,
+    INSTEON_ADDR_REGEX,
     PORT_HUB_V1,
     PORT_HUB_V2,
     SRV_ALL_LINK_GROUP,
@@ -56,12 +58,18 @@ def set_default_port(schema: dict) -> dict:
     """Set the default port based on the Hub version."""
     # If the ip_port is found do nothing
     # If it is not found the set the default
-    ip_port = schema.get(CONF_IP_PORT)
-    if not ip_port:
+    if not schema.get(CONF_IP_PORT):
         hub_version = schema.get(CONF_HUB_VERSION)
         # Found hub_version but not ip_port
         schema[CONF_IP_PORT] = PORT_HUB_V1 if hub_version == 1 else PORT_HUB_V2
     return schema
+
+
+def insteon_address(value: str) -> str:
+    """Validate an Insteon address."""
+    if not INSTEON_ADDR_REGEX.match(value):
+        raise vol.Invalid("Invalid Insteon Address")
+    return str(value).replace(".", "").lower()
 
 
 CONF_DEVICE_OVERRIDE_SCHEMA = vol.All(
@@ -114,6 +122,7 @@ CONFIG_SCHEMA = vol.Schema(
                     vol.Optional(CONF_X10): vol.All(
                         cv.ensure_list_csv, [CONF_X10_SCHEMA]
                     ),
+                    vol.Optional(CONF_DEV_PATH): cv.string,
                 },
                 extra=vol.ALLOW_EXTRA,
                 required=True,
@@ -161,7 +170,7 @@ TRIGGER_SCENE_SCHEMA = vol.Schema(
 ADD_DEFAULT_LINKS_SCHEMA = vol.Schema({vol.Required(CONF_ENTITY_ID): cv.entity_id})
 
 
-def normalize_byte_entry_to_int(entry: [int, bytes, str]):
+def normalize_byte_entry_to_int(entry: int | bytes | str):
     """Format a hex entry value."""
     if isinstance(entry, int):
         if entry in range(0, 256):

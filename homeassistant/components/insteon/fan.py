@@ -1,13 +1,18 @@
 """Support for INSTEON fans via PowerLinc Modem."""
+from __future__ import annotations
+
 import math
+from typing import Any
 
 from homeassistant.components.fan import (
     DOMAIN as FAN_DOMAIN,
-    SUPPORT_SET_SPEED,
     FanEntity,
+    FanEntityFeature,
 )
-from homeassistant.core import callback
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util.percentage import (
     percentage_to_ranged_value,
     ranged_value_to_percentage,
@@ -20,7 +25,11 @@ from .utils import async_add_insteon_entities
 SPEED_RANGE = (1, 255)  # off is not included
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
     """Set up the Insteon fans from a config entry."""
 
     @callback
@@ -38,17 +47,14 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class InsteonFanEntity(InsteonEntity, FanEntity):
     """An INSTEON fan entity."""
 
+    _attr_supported_features = FanEntityFeature.SET_SPEED
+
     @property
-    def percentage(self) -> int:
+    def percentage(self) -> int | None:
         """Return the current speed percentage."""
         if self._insteon_device_group.value is None:
             return None
         return ranged_value_to_percentage(SPEED_RANGE, self._insteon_device_group.value)
-
-    @property
-    def supported_features(self) -> int:
-        """Flag supported features."""
-        return SUPPORT_SET_SPEED
 
     @property
     def speed_count(self) -> int:
@@ -57,15 +63,14 @@ class InsteonFanEntity(InsteonEntity, FanEntity):
 
     async def async_turn_on(
         self,
-        speed: str = None,
-        percentage: int = None,
-        preset_mode: str = None,
-        **kwargs,
+        percentage: int | None = None,
+        preset_mode: str | None = None,
+        **kwargs: Any,
     ) -> None:
         """Turn on the fan."""
         await self.async_set_percentage(percentage or 67)
 
-    async def async_turn_off(self, **kwargs) -> None:
+    async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the fan."""
         await self._insteon_device.async_fan_off()
 

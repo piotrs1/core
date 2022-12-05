@@ -1,123 +1,121 @@
 """Support for esphome devices."""
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
+from collections.abc import Callable
 import functools
 import logging
 import math
-from typing import Generic, TypeVar
+from typing import Any, Generic, NamedTuple, TypeVar, cast, overload
 
 from aioesphomeapi import (
     APIClient,
     APIConnectionError,
+    APIIntEnum,
     APIVersion,
+    BadNameAPIError,
     DeviceInfo as EsphomeDeviceInfo,
+    EntityCategory as EsphomeEntityCategory,
     EntityInfo,
     EntityState,
     HomeassistantServiceCall,
+    InvalidEncryptionKeyAPIError,
+    ReconnectLogic,
+    RequiresEncryptionAPIError,
     UserService,
     UserServiceArgType,
 )
+from awesomeversion import AwesomeVersion
 import voluptuous as vol
-from zeroconf import DNSPointer, DNSRecord, RecordUpdateListener, Zeroconf
 
 from homeassistant import const
-from homeassistant.components import zeroconf
+from homeassistant.components import tag, zeroconf
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    ATTR_DEVICE_ID,
     CONF_HOST,
     CONF_MODE,
     CONF_PASSWORD,
     CONF_PORT,
     EVENT_HOMEASSISTANT_STOP,
 )
-from homeassistant.core import Event, HomeAssistant, State, callback
+from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
 from homeassistant.exceptions import TemplateError
 from homeassistant.helpers import template
 import homeassistant.helpers.config_validation as cv
 import homeassistant.helpers.device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.entity import DeviceInfo, Entity
+from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.helpers.json import JSONEncoder
+from homeassistant.helpers.issue_registry import (
+    IssueSeverity,
+    async_create_issue,
+    async_delete_issue,
+)
 from homeassistant.helpers.service import async_set_service_schema
-from homeassistant.helpers.storage import Store
 from homeassistant.helpers.template import Template
+
+from .bluetooth import async_connect_scanner
+from .domain_data import DOMAIN, DomainData
 
 # Import config flow so that it's added to the registry
 from .entry_data import RuntimeEntryData
 
-DOMAIN = "esphome"
+CONF_NOISE_PSK = "noise_psk"
 _LOGGER = logging.getLogger(__name__)
-_T = TypeVar("_T")
+_R = TypeVar("_R")
 
-STORAGE_VERSION = 1
-
-
-@dataclass
-class DomainData:
-    """Define a class that stores global esphome data in hass.data[DOMAIN]."""
-
-    _entry_datas: dict[str, RuntimeEntryData] = field(default_factory=dict)
-    _stores: dict[str, Store] = field(default_factory=dict)
-
-    def get_entry_data(self, entry: ConfigEntry) -> RuntimeEntryData:
-        """Return the runtime entry data associated with this config entry.
-
-        Raises KeyError if the entry isn't loaded yet.
-        """
-        return self._entry_datas[entry.entry_id]
-
-    def set_entry_data(self, entry: ConfigEntry, entry_data: RuntimeEntryData) -> None:
-        """Set the runtime entry data associated with this config entry."""
-        if entry.entry_id in self._entry_datas:
-            raise ValueError("Entry data for this entry is already set")
-        self._entry_datas[entry.entry_id] = entry_data
-
-    def pop_entry_data(self, entry: ConfigEntry) -> RuntimeEntryData:
-        """Pop the runtime entry data instance associated with this config entry."""
-        return self._entry_datas.pop(entry.entry_id)
-
-    def is_entry_loaded(self, entry: ConfigEntry) -> bool:
-        """Check whether the given entry is loaded."""
-        return entry.entry_id in self._entry_datas
-
-    def get_or_create_store(self, hass: HomeAssistant, entry: ConfigEntry) -> Store:
-        """Get or create a Store instance for the given config entry."""
-        return self._stores.setdefault(
-            entry.entry_id,
-            Store(
-                hass, STORAGE_VERSION, f"esphome.{entry.entry_id}", encoder=JSONEncoder
-            ),
-        )
-
-    @classmethod
-    def get(cls: type[_T], hass: HomeAssistant) -> _T:
-        """Get the global DomainData instance stored in hass.data."""
-        # Don't use setdefault - this is a hot code path
-        if DOMAIN in hass.data:
-            return hass.data[DOMAIN]
-        ret = hass.data[DOMAIN] = cls()
-        return ret
+STABLE_BLE_VERSION_STR = "2022.11.0"
+STABLE_BLE_VERSION = AwesomeVersion(STABLE_BLE_VERSION_STR)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+@callback
+def _async_check_firmware_version(
+    hass: HomeAssistant, device_info: EsphomeDeviceInfo
+) -> None:
+    """Create or delete an the ble_firmware_outdated issue."""
+    # ESPHome device_info.name is the unique_id
+    issue = f"ble_firmware_outdated-{device_info.name}"
+    if (
+        not device_info.bluetooth_proxy_version
+        # If the device has a project name its up to that project
+        # to tell them about the firmware version update so we don't notify here
+        or device_info.project_name
+        or AwesomeVersion(device_info.esphome_version) >= STABLE_BLE_VERSION
+    ):
+        async_delete_issue(hass, DOMAIN, issue)
+        return
+    async_create_issue(
+        hass,
+        DOMAIN,
+        issue,
+        is_fixable=False,
+        severity=IssueSeverity.WARNING,
+        learn_more_url=f"https://esphome.io/changelog/{STABLE_BLE_VERSION_STR}.html",
+        translation_key="ble_firmware_outdated",
+        translation_placeholders={"name": device_info.name},
+    )
+
+
+async def async_setup_entry(  # noqa: C901
+    hass: HomeAssistant, entry: ConfigEntry
+) -> bool:
     """Set up the esphome component."""
     host = entry.data[CONF_HOST]
     port = entry.data[CONF_PORT]
     password = entry.data[CONF_PASSWORD]
-    device_id = None
+    noise_psk = entry.data.get(CONF_NOISE_PSK)
+    device_id: str | None = None
 
     zeroconf_instance = await zeroconf.async_get_instance(hass)
 
     cli = APIClient(
-        hass.loop,
         host,
         port,
         password,
         client_info=f"Home Assistant {const.__version__}",
         zeroconf_instance=zeroconf_instance,
+        noise_psk=noise_psk,
     )
 
     domain_data = DomainData.get(hass)
@@ -138,11 +136,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry_data.cleanup_callbacks.append(
         hass.bus.async_listen(EVENT_HOMEASSISTANT_STOP, on_stop)
     )
-
-    @callback
-    def async_on_state(state: EntityState) -> None:
-        """Send dispatcher updates when a new state is received."""
-        entry_data.async_update_state(hass, state)
 
     @callback
     def async_on_service_call(service: HomeassistantServiceCall) -> None:
@@ -173,14 +166,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 return
 
             # Call native tag scan
-            if service_name == "tag_scanned":
+            if service_name == "tag_scanned" and device_id is not None:
                 tag_id = service_data["tag_id"]
-                hass.async_create_task(
-                    hass.components.tag.async_scan_tag(tag_id, device_id)
-                )
+                hass.async_create_task(tag.async_scan_tag(hass, tag_id, device_id))
                 return
 
-            hass.bus.async_fire(service.service, service_data)
+            hass.bus.async_fire(
+                service.service,
+                {
+                    ATTR_DEVICE_ID: device_id,
+                    **service_data,
+                },
+            )
         else:
             hass.async_create_task(
                 hass.services.async_call(
@@ -197,10 +194,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         send_state = state.state
         if attribute:
-            send_state = state.attributes[attribute]
+            attr_val = state.attributes[attribute]
             # ESPHome only handles "on"/"off" for boolean values
-            if isinstance(send_state, bool):
-                send_state = "on" if send_state else "off"
+            if isinstance(attr_val, bool):
+                send_state = "on" if attr_val else "off"
+            else:
+                send_state = attr_val
 
         await cli.send_home_assistant_state(entity_id, attribute, str(send_state))
 
@@ -214,8 +213,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             """Forward Home Assistant states updates to ESPHome."""
 
             # Only communicate changes to the state or attribute tracked
-            if (
-                "old_state" in event.data
+            if event.data.get("new_state") is None or (
+                event.data.get("old_state") is not None
                 and "new_state" in event.data
                 and (
                     (
@@ -248,14 +247,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _send_home_assistant_state(entity_id, attribute, hass.states.get(entity_id))
         )
 
-    async def on_login() -> None:
+    async def on_connect() -> None:
         """Subscribe to states and list entities on successful API login."""
         nonlocal device_id
         try:
-            entry_data.device_info = await cli.device_info()
+            device_info = await cli.device_info()
+            entry_data.device_info = device_info
+            assert cli.api_version is not None
             entry_data.api_version = cli.api_version
             entry_data.available = True
-            device_id = await _async_setup_device_registry(
+            if entry_data.device_info.name:
+                cli.expected_name = entry_data.device_info.name
+                reconnect_logic.name = entry_data.device_info.name
+            device_id = _async_setup_device_registry(
                 hass, entry, entry_data.device_info
             )
             entry_data.async_update_device_state(hass)
@@ -263,359 +267,194 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entity_infos, services = await cli.list_entities_services()
             await entry_data.async_update_static_infos(hass, entry, entity_infos)
             await _setup_services(hass, entry_data, services)
-            await cli.subscribe_states(async_on_state)
+            await cli.subscribe_states(entry_data.async_update_state)
             await cli.subscribe_service_calls(async_on_service_call)
             await cli.subscribe_home_assistant_states(async_on_state_subscription)
+            if entry_data.device_info.bluetooth_proxy_version:
+                entry_data.disconnect_callbacks.append(
+                    await async_connect_scanner(hass, entry, cli, entry_data)
+                )
 
             hass.async_create_task(entry_data.async_save_to_store())
         except APIConnectionError as err:
             _LOGGER.warning("Error getting initial data for %s: %s", host, err)
             # Re-connection logic will trigger after this
             await cli.disconnect()
+        else:
+            _async_check_firmware_version(hass, device_info)
+
+    async def on_disconnect() -> None:
+        """Run disconnect callbacks on API disconnect."""
+        name = entry_data.device_info.name if entry_data.device_info else host
+        _LOGGER.debug("%s: %s disconnected, running disconnected callbacks", name, host)
+        for disconnect_cb in entry_data.disconnect_callbacks:
+            disconnect_cb()
+        entry_data.disconnect_callbacks = []
+        entry_data.available = False
+        entry_data.async_update_device_state(hass)
+
+    async def on_connect_error(err: Exception) -> None:
+        """Start reauth flow if appropriate connect error type."""
+        if isinstance(err, (RequiresEncryptionAPIError, InvalidEncryptionKeyAPIError)):
+            entry.async_start_reauth(hass)
+        if isinstance(err, BadNameAPIError):
+            _LOGGER.warning(
+                "Name of device %s changed to %s, potentially due to IP reassignment",
+                cli.expected_name,
+                err.received_name,
+            )
 
     reconnect_logic = ReconnectLogic(
-        hass, cli, entry, host, on_login, zeroconf_instance
+        client=cli,
+        on_connect=on_connect,
+        on_disconnect=on_disconnect,
+        zeroconf_instance=zeroconf_instance,
+        name=host,
+        on_connect_error=on_connect_error,
     )
 
-    async def complete_setup() -> None:
-        """Complete the config entry setup."""
-        infos, services = await entry_data.async_load_from_store()
-        await entry_data.async_update_static_infos(hass, entry, infos)
-        await _setup_services(hass, entry_data, services)
+    infos, services = await entry_data.async_load_from_store()
+    await entry_data.async_update_static_infos(hass, entry, infos)
+    await _setup_services(hass, entry_data, services)
 
-        await reconnect_logic.start()
-        entry_data.cleanup_callbacks.append(reconnect_logic.stop_callback)
+    if entry_data.device_info is not None and entry_data.device_info.name:
+        cli.expected_name = entry_data.device_info.name
+        reconnect_logic.name = entry_data.device_info.name
+        if entry.unique_id is None:
+            hass.config_entries.async_update_entry(
+                entry, unique_id=entry_data.device_info.name
+            )
 
-    hass.async_create_task(complete_setup())
+    await reconnect_logic.start()
+    entry_data.cleanup_callbacks.append(reconnect_logic.stop_callback)
+
     return True
 
 
-class ReconnectLogic(RecordUpdateListener):
-    """Reconnectiong logic handler for ESPHome config entries.
-
-    Contains two reconnect strategies:
-     - Connect with increasing time between connection attempts.
-     - Listen to zeroconf mDNS records, if any records are found for this device, try reconnecting immediately.
-    """
-
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        cli: APIClient,
-        entry: ConfigEntry,
-        host: str,
-        on_login,
-        zc: Zeroconf,
-    ):
-        """Initialize ReconnectingLogic."""
-        self._hass = hass
-        self._cli = cli
-        self._entry = entry
-        self._host = host
-        self._on_login = on_login
-        self._zc = zc
-        # Flag to check if the device is connected
-        self._connected = True
-        self._connected_lock = asyncio.Lock()
-        self._zc_lock = asyncio.Lock()
-        self._zc_listening = False
-        # Event the different strategies use for issuing a reconnect attempt.
-        self._reconnect_event = asyncio.Event()
-        # The task containing the infinite reconnect loop while running
-        self._loop_task: asyncio.Task | None = None
-        # How many reconnect attempts have there been already, used for exponential wait time
-        self._tries = 0
-        self._tries_lock = asyncio.Lock()
-        # Track the wait task to cancel it on HA shutdown
-        self._wait_task: asyncio.Task | None = None
-        self._wait_task_lock = asyncio.Lock()
-
-    @property
-    def _entry_data(self) -> RuntimeEntryData | None:
-        domain_data = DomainData.get(self._hass)
-        try:
-            return domain_data.get_entry_data(self._entry)
-        except KeyError:
-            return None
-
-    async def _on_disconnect(self):
-        """Log and issue callbacks when disconnecting."""
-        if self._entry_data is None:
-            return
-        # This can happen often depending on WiFi signal strength.
-        # So therefore all these connection warnings are logged
-        # as infos. The "unavailable" logic will still trigger so the
-        # user knows if the device is not connected.
-        _LOGGER.info("Disconnected from ESPHome API for %s", self._host)
-
-        # Run disconnect hooks
-        for disconnect_cb in self._entry_data.disconnect_callbacks:
-            disconnect_cb()
-        self._entry_data.disconnect_callbacks = []
-        self._entry_data.available = False
-        self._entry_data.async_update_device_state(self._hass)
-        await self._start_zc_listen()
-
-        # Reset tries
-        async with self._tries_lock:
-            self._tries = 0
-        # Connected needs to be reset before the reconnect event (opposite order of check)
-        async with self._connected_lock:
-            self._connected = False
-        self._reconnect_event.set()
-
-    async def _wait_and_start_reconnect(self):
-        """Wait for exponentially increasing time to issue next reconnect event."""
-        async with self._tries_lock:
-            tries = self._tries
-        # If not first re-try, wait and print message
-        # Cap wait time at 1 minute. This is because while working on the
-        # device (e.g. soldering stuff), users don't want to have to wait
-        # a long time for their device to show up in HA again (this was
-        # mentioned a lot in early feedback)
-        tries = min(tries, 10)  # prevent OverflowError
-        wait_time = int(round(min(1.8 ** tries, 60.0)))
-        if tries == 1:
-            _LOGGER.info("Trying to reconnect to %s in the background", self._host)
-        _LOGGER.debug("Retrying %s in %d seconds", self._host, wait_time)
-        await asyncio.sleep(wait_time)
-        async with self._wait_task_lock:
-            self._wait_task = None
-        self._reconnect_event.set()
-
-    async def _try_connect(self):
-        """Try connecting to the API client."""
-        async with self._tries_lock:
-            tries = self._tries
-            self._tries += 1
-
-        try:
-            await self._cli.connect(on_stop=self._on_disconnect, login=True)
-        except APIConnectionError as error:
-            level = logging.WARNING if tries == 0 else logging.DEBUG
-            _LOGGER.log(
-                level,
-                "Can't connect to ESPHome API for %s (%s): %s",
-                self._entry.unique_id,
-                self._host,
-                error,
-            )
-            await self._start_zc_listen()
-            # Schedule re-connect in event loop in order not to delay HA
-            # startup. First connect is scheduled in tracked tasks.
-            async with self._wait_task_lock:
-                # Allow only one wait task at a time
-                # can happen if mDNS record received while waiting, then use existing wait task
-                if self._wait_task is not None:
-                    return
-
-                self._wait_task = self._hass.loop.create_task(
-                    self._wait_and_start_reconnect()
-                )
-        else:
-            _LOGGER.info("Successfully connected to %s", self._host)
-            async with self._tries_lock:
-                self._tries = 0
-            async with self._connected_lock:
-                self._connected = True
-            await self._stop_zc_listen()
-            self._hass.async_create_task(self._on_login())
-
-    async def _reconnect_once(self):
-        # Wait and clear reconnection event
-        await self._reconnect_event.wait()
-        self._reconnect_event.clear()
-
-        # If in connected state, do not try to connect again.
-        async with self._connected_lock:
-            if self._connected:
-                return False
-
-        # Check if the entry got removed or disabled, in which case we shouldn't reconnect
-        if not DomainData.get(self._hass).is_entry_loaded(self._entry):
-            # When removing/disconnecting manually
-            return
-
-        device_registry = self._hass.helpers.device_registry.async_get(self._hass)
-        devices = dr.async_entries_for_config_entry(
-            device_registry, self._entry.entry_id
-        )
-        for device in devices:
-            # There is only one device in ESPHome
-            if device.disabled:
-                # Don't attempt to connect if it's disabled
-                return
-
-        await self._try_connect()
-
-    async def _reconnect_loop(self):
-        while True:
-            try:
-                await self._reconnect_once()
-            except asyncio.CancelledError:  # pylint: disable=try-except-raise
-                raise
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.error("Caught exception while reconnecting", exc_info=True)
-
-    async def start(self):
-        """Start the reconnecting logic background task."""
-        # Create reconnection loop outside of HA's tracked tasks in order
-        # not to delay startup.
-        self._loop_task = self._hass.loop.create_task(self._reconnect_loop())
-
-        async with self._connected_lock:
-            self._connected = False
-        self._reconnect_event.set()
-
-    async def stop(self):
-        """Stop the reconnecting logic background task. Does not disconnect the client."""
-        if self._loop_task is not None:
-            self._loop_task.cancel()
-            self._loop_task = None
-        async with self._wait_task_lock:
-            if self._wait_task is not None:
-                self._wait_task.cancel()
-            self._wait_task = None
-        await self._stop_zc_listen()
-
-    async def _start_zc_listen(self):
-        """Listen for mDNS records.
-
-        This listener allows us to schedule a reconnect as soon as a
-        received mDNS record indicates the node is up again.
-        """
-        async with self._zc_lock:
-            if not self._zc_listening:
-                await self._hass.async_add_executor_job(
-                    self._zc.add_listener, self, None
-                )
-                self._zc_listening = True
-
-    async def _stop_zc_listen(self):
-        """Stop listening for zeroconf updates."""
-        async with self._zc_lock:
-            if self._zc_listening:
-                await self._hass.async_add_executor_job(self._zc.remove_listener, self)
-                self._zc_listening = False
-
-    @callback
-    def stop_callback(self):
-        """Stop as an async callback function."""
-        self._hass.async_create_task(self.stop())
-
-    @callback
-    def _set_reconnect(self):
-        self._reconnect_event.set()
-
-    def update_record(self, zc: Zeroconf, now: float, record: DNSRecord) -> None:
-        """Listen to zeroconf updated mDNS records."""
-        if not isinstance(record, DNSPointer):
-            # We only consider PTR records and match using the alias name
-            return
-        if self._entry_data is None or self._entry_data.device_info is None:
-            # Either the entry was already teared down or we haven't received device info yet
-            return
-        filter_alias = f"{self._entry_data.device_info.name}._esphomelib._tcp.local."
-        if record.alias != filter_alias:
-            return
-
-        # This is a mDNS record from the device and could mean it just woke up
-        # Check if already connected, no lock needed for this access
-        if self._connected:
-            return
-
-        # Tell reconnection logic to retry connection attempt now (even before reconnect timer finishes)
-        _LOGGER.debug(
-            "%s: Triggering reconnect because of received mDNS record %s",
-            self._host,
-            record,
-        )
-        self._hass.add_job(self._set_reconnect)
-
-
-async def _async_setup_device_registry(
+@callback
+def _async_setup_device_registry(
     hass: HomeAssistant, entry: ConfigEntry, device_info: EsphomeDeviceInfo
-):
+) -> str:
     """Set up device registry feature for a particular config entry."""
     sw_version = device_info.esphome_version
     if device_info.compilation_time:
         sw_version += f" ({device_info.compilation_time})"
-    device_registry = await dr.async_get_registry(hass)
-    entry = device_registry.async_get_or_create(
+
+    configuration_url = None
+    if device_info.webserver_port > 0:
+        configuration_url = f"http://{entry.data['host']}:{device_info.webserver_port}"
+
+    manufacturer = "espressif"
+    if device_info.manufacturer:
+        manufacturer = device_info.manufacturer
+    model = device_info.model
+    hw_version = None
+    if device_info.project_name:
+        project_name = device_info.project_name.split(".")
+        manufacturer = project_name[0]
+        model = project_name[1]
+        hw_version = device_info.project_version
+
+    device_registry = dr.async_get(hass)
+    device_entry = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
+        configuration_url=configuration_url,
         connections={(dr.CONNECTION_NETWORK_MAC, device_info.mac_address)},
         name=device_info.name,
-        manufacturer="espressif",
-        model=device_info.model,
+        manufacturer=manufacturer,
+        model=model,
         sw_version=sw_version,
+        hw_version=hw_version,
     )
-    return entry.id
+    return device_entry.id
+
+
+class ServiceMetadata(NamedTuple):
+    """Metadata for services."""
+
+    validator: Any
+    example: str
+    selector: dict[str, Any]
+    description: str | None = None
+
+
+ARG_TYPE_METADATA = {
+    UserServiceArgType.BOOL: ServiceMetadata(
+        validator=cv.boolean,
+        example="False",
+        selector={"boolean": None},
+    ),
+    UserServiceArgType.INT: ServiceMetadata(
+        validator=vol.Coerce(int),
+        example="42",
+        selector={"number": {CONF_MODE: "box"}},
+    ),
+    UserServiceArgType.FLOAT: ServiceMetadata(
+        validator=vol.Coerce(float),
+        example="12.3",
+        selector={"number": {CONF_MODE: "box", "step": 1e-3}},
+    ),
+    UserServiceArgType.STRING: ServiceMetadata(
+        validator=cv.string,
+        example="Example text",
+        selector={"text": None},
+    ),
+    UserServiceArgType.BOOL_ARRAY: ServiceMetadata(
+        validator=[cv.boolean],
+        description="A list of boolean values.",
+        example="[True, False]",
+        selector={"object": {}},
+    ),
+    UserServiceArgType.INT_ARRAY: ServiceMetadata(
+        validator=[vol.Coerce(int)],
+        description="A list of integer values.",
+        example="[42, 34]",
+        selector={"object": {}},
+    ),
+    UserServiceArgType.FLOAT_ARRAY: ServiceMetadata(
+        validator=[vol.Coerce(float)],
+        description="A list of floating point numbers.",
+        example="[ 12.3, 34.5 ]",
+        selector={"object": {}},
+    ),
+    UserServiceArgType.STRING_ARRAY: ServiceMetadata(
+        validator=[cv.string],
+        description="A list of strings.",
+        example="['Example text', 'Another example']",
+        selector={"object": {}},
+    ),
+}
 
 
 async def _register_service(
     hass: HomeAssistant, entry_data: RuntimeEntryData, service: UserService
-):
+) -> None:
+    if entry_data.device_info is None:
+        raise ValueError("Device Info needs to be fetched first")
     service_name = f"{entry_data.device_info.name.replace('-', '_')}_{service.name}"
     schema = {}
     fields = {}
 
     for arg in service.args:
-        metadata = {
-            UserServiceArgType.BOOL: {
-                "validator": cv.boolean,
-                "example": "False",
-                "selector": {"boolean": None},
-            },
-            UserServiceArgType.INT: {
-                "validator": vol.Coerce(int),
-                "example": "42",
-                "selector": {"number": {CONF_MODE: "box"}},
-            },
-            UserServiceArgType.FLOAT: {
-                "validator": vol.Coerce(float),
-                "example": "12.3",
-                "selector": {"number": {CONF_MODE: "box", "step": 1e-3}},
-            },
-            UserServiceArgType.STRING: {
-                "validator": cv.string,
-                "example": "Example text",
-                "selector": {"text": None},
-            },
-            UserServiceArgType.BOOL_ARRAY: {
-                "validator": [cv.boolean],
-                "description": "A list of boolean values.",
-                "example": "[True, False]",
-                "selector": {"object": {}},
-            },
-            UserServiceArgType.INT_ARRAY: {
-                "validator": [vol.Coerce(int)],
-                "description": "A list of integer values.",
-                "example": "[42, 34]",
-                "selector": {"object": {}},
-            },
-            UserServiceArgType.FLOAT_ARRAY: {
-                "validator": [vol.Coerce(float)],
-                "description": "A list of floating point numbers.",
-                "example": "[ 12.3, 34.5 ]",
-                "selector": {"object": {}},
-            },
-            UserServiceArgType.STRING_ARRAY: {
-                "validator": [cv.string],
-                "description": "A list of strings.",
-                "example": "['Example text', 'Another example']",
-                "selector": {"object": {}},
-            },
-        }[arg.type]
-        schema[vol.Required(arg.name)] = metadata["validator"]
+        if arg.type not in ARG_TYPE_METADATA:
+            _LOGGER.error(
+                "Can't register service %s because %s is of unknown type %s",
+                service_name,
+                arg.name,
+                arg.type,
+            )
+            return
+        metadata = ARG_TYPE_METADATA[arg.type]
+        schema[vol.Required(arg.name)] = metadata.validator
         fields[arg.name] = {
             "name": arg.name,
             "required": True,
-            "description": metadata.get("description"),
-            "example": metadata["example"],
-            "selector": metadata["selector"],
+            "description": metadata.description,
+            "example": metadata.example,
+            "selector": metadata.selector,
         }
 
-    async def execute_service(call):
+    async def execute_service(call: ServiceCall) -> None:
         await entry_data.client.execute_service(service, call.data)
 
     hass.services.async_register(
@@ -632,15 +471,17 @@ async def _register_service(
 
 async def _setup_services(
     hass: HomeAssistant, entry_data: RuntimeEntryData, services: list[UserService]
-):
+) -> None:
+    if entry_data.device_info is None:
+        # Can happen if device has never connected or .storage cleared
+        return
     old_services = entry_data.services.copy()
     to_unregister = []
     to_register = []
     for service in services:
         if service.key in old_services:
             # Already exists
-            matching = old_services.pop(service.key)
-            if matching != service:
+            if (matching := old_services.pop(service.key)) != service:
                 # Need to re-register
                 to_unregister.append(matching)
                 to_register.append(service)
@@ -667,8 +508,10 @@ async def _cleanup_instance(
     """Cleanup the esphome client if it exists."""
     domain_data = DomainData.get(hass)
     data = domain_data.pop_entry_data(entry)
+    data.available = False
     for disconnect_cb in data.disconnect_callbacks:
         disconnect_cb()
+    data.disconnect_callbacks = []
     for cleanup_callback in data.cleanup_callbacks:
         cleanup_callback()
     await data.client.disconnect()
@@ -688,15 +531,20 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await DomainData.get(hass).get_or_create_store(hass, entry).async_remove()
 
 
+_InfoT = TypeVar("_InfoT", bound=EntityInfo)
+_EntityT = TypeVar("_EntityT", bound="EsphomeEntity[Any,Any]")
+_StateT = TypeVar("_StateT", bound=EntityState)
+
+
 async def platform_async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    async_add_entities,
+    async_add_entities: AddEntitiesCallback,
     *,
     component_key: str,
-    info_type,
-    entity_type,
-    state_type,
+    info_type: type[_InfoT],
+    entity_type: type[_EntityT],
+    state_type: type[_StateT],
 ) -> None:
     """Set up an esphome platform.
 
@@ -706,14 +554,14 @@ async def platform_async_setup_entry(
     entry_data: RuntimeEntryData = DomainData.get(hass).get_entry_data(entry)
     entry_data.info[component_key] = {}
     entry_data.old_info[component_key] = {}
-    entry_data.state[component_key] = {}
+    entry_data.state.setdefault(state_type, {})
 
     @callback
-    def async_list_entities(infos: list[EntityInfo]):
+    def async_list_entities(infos: list[EntityInfo]) -> None:
         """Update entities of this platform when entities are listed."""
         old_infos = entry_data.info[component_key]
-        new_infos = {}
-        add_entities = []
+        new_infos: dict[int, EntityInfo] = {}
+        add_entities: list[_EntityT] = []
         for info in infos:
             if not isinstance(info, info_type):
                 # Filter out infos that don't belong to this platform.
@@ -724,7 +572,7 @@ async def platform_async_setup_entry(
                 old_infos.pop(info.key)
             else:
                 # Create new entity
-                entity = entity_type(entry_data, component_key, info.key)
+                entity = entity_type(entry_data, component_key, info.key, state_type)
                 add_entities.append(entity)
             new_infos[info.key] = info
 
@@ -745,30 +593,20 @@ async def platform_async_setup_entry(
         async_dispatcher_connect(hass, signal, async_list_entities)
     )
 
-    @callback
-    def async_entity_state(state: EntityState):
-        """Notify the appropriate entity of an updated state."""
-        if not isinstance(state, state_type):
-            return
-        entry_data.state[component_key][state.key] = state
-        entry_data.async_update_entity(hass, component_key, state.key)
 
-    signal = f"esphome_{entry.entry_id}_on_state"
-    entry_data.cleanup_callbacks.append(
-        async_dispatcher_connect(hass, signal, async_entity_state)
-    )
-
-
-def esphome_state_property(func):
+def esphome_state_property(
+    func: Callable[[_EntityT], _R]
+) -> Callable[[_EntityT], _R | None]:
     """Wrap a state property of an esphome entity.
 
     This checks if the state object in the entity is set, and
     prevents writing NAN values to the Home Assistant state machine.
     """
 
-    @property
-    def _wrapper(self):
-        if self._state is None:
+    @functools.wraps(func)
+    def _wrapper(self: _EntityT) -> _R | None:
+        # pylint: disable-next=protected-access
+        if not self._has_state:
             return None
         val = func(self)
         if isinstance(val, float) and math.isnan(val):
@@ -780,35 +618,70 @@ def esphome_state_property(func):
     return _wrapper
 
 
-class EsphomeEnumMapper(Generic[_T]):
+_EnumT = TypeVar("_EnumT", bound=APIIntEnum)
+_ValT = TypeVar("_ValT")
+
+
+class EsphomeEnumMapper(Generic[_EnumT, _ValT]):
     """Helper class to convert between hass and esphome enum values."""
 
-    def __init__(self, mapping: dict[_T, str]) -> None:
+    def __init__(self, mapping: dict[_EnumT, _ValT]) -> None:
         """Construct a EsphomeEnumMapper."""
         # Add none mapping
-        mapping = {None: None, **mapping}
-        self._mapping = mapping
-        self._inverse: dict[str, _T] = {v: k for k, v in mapping.items()}
+        augmented_mapping: dict[_EnumT | None, _ValT | None] = mapping  # type: ignore[assignment]
+        augmented_mapping[None] = None
 
-    def from_esphome(self, value: _T | None) -> str | None:
+        self._mapping = augmented_mapping
+        self._inverse: dict[_ValT, _EnumT] = {v: k for k, v in mapping.items()}
+
+    @overload
+    def from_esphome(self, value: _EnumT) -> _ValT:
+        ...
+
+    @overload
+    def from_esphome(self, value: _EnumT | None) -> _ValT | None:
+        ...
+
+    def from_esphome(self, value: _EnumT | None) -> _ValT | None:
         """Convert from an esphome int representation to a hass string."""
         return self._mapping[value]
 
-    def from_hass(self, value: str) -> _T:
+    def from_hass(self, value: _ValT) -> _EnumT:
         """Convert from a hass string to a esphome int representation."""
         return self._inverse[value]
 
 
-class EsphomeBaseEntity(Entity):
+ICON_SCHEMA = vol.Schema(cv.icon)
+
+
+ENTITY_CATEGORIES: EsphomeEnumMapper[
+    EsphomeEntityCategory, EntityCategory | None
+] = EsphomeEnumMapper(
+    {
+        EsphomeEntityCategory.NONE: None,
+        EsphomeEntityCategory.CONFIG: EntityCategory.CONFIG,
+        EsphomeEntityCategory.DIAGNOSTIC: EntityCategory.DIAGNOSTIC,
+    }
+)
+
+
+class EsphomeEntity(Entity, Generic[_InfoT, _StateT]):
     """Define a base esphome entity."""
 
+    _attr_should_poll = False
+
     def __init__(
-        self, entry_data: RuntimeEntryData, component_key: str, key: int
+        self,
+        entry_data: RuntimeEntryData,
+        component_key: str,
+        key: int,
+        state_type: type[_StateT],
     ) -> None:
         """Initialize."""
         self._entry_data = entry_data
         self._component_key = component_key
         self._key = key
+        self._state_type = state_type
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks."""
@@ -831,6 +704,17 @@ class EsphomeBaseEntity(Entity):
             )
         )
 
+        self.async_on_remove(
+            self._entry_data.async_subscribe_state_update(
+                self._state_type, self._key, self._on_state_update
+            )
+        )
+
+    @callback
+    def _on_state_update(self) -> None:
+        # Behavior can be changed in child classes
+        self.async_write_ha_state()
+
     @callback
     def _on_device_update(self) -> None:
         """Update the entity state when device info has changed."""
@@ -839,7 +723,7 @@ class EsphomeBaseEntity(Entity):
             # Only update the HA state when the full state arrives
             # through the next entity state packet.
             return
-        self.async_write_ha_state()
+        self._on_state_update()
 
     @property
     def _entry_id(self) -> str:
@@ -850,17 +734,18 @@ class EsphomeBaseEntity(Entity):
         return self._entry_data.api_version
 
     @property
-    def _static_info(self) -> EntityInfo:
+    def _static_info(self) -> _InfoT:
         # Check if value is in info database. Use a single lookup.
         info = self._entry_data.info[self._component_key].get(self._key)
         if info is not None:
-            return info
+            return cast(_InfoT, info)
         # This entity is in the removal project and has been removed from .info
         # already, look in old_info
-        return self._entry_data.old_info[self._component_key].get(self._key)
+        return cast(_InfoT, self._entry_data.old_info[self._component_key][self._key])
 
     @property
     def _device_info(self) -> EsphomeDeviceInfo:
+        assert self._entry_data.device_info is not None
         return self._entry_data.device_info
 
     @property
@@ -868,11 +753,12 @@ class EsphomeBaseEntity(Entity):
         return self._entry_data.client
 
     @property
-    def _state(self) -> EntityState | None:
-        try:
-            return self._entry_data.state[self._component_key][self._key]
-        except KeyError:
-            return None
+    def _state(self) -> _StateT:
+        return cast(_StateT, self._entry_data.state[self._state_type][self._key])
+
+    @property
+    def _has_state(self) -> bool:
+        return self._key in self._entry_data.state[self._state_type]
 
     @property
     def available(self) -> bool:
@@ -896,9 +782,9 @@ class EsphomeBaseEntity(Entity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device registry information for this entity."""
-        return {
-            "connections": {(dr.CONNECTION_NETWORK_MAC, self._device_info.mac_address)}
-        }
+        return DeviceInfo(
+            connections={(dr.CONNECTION_NETWORK_MAC, self._device_info.mac_address)}
+        )
 
     @property
     def name(self) -> str:
@@ -906,26 +792,21 @@ class EsphomeBaseEntity(Entity):
         return self._static_info.name
 
     @property
-    def should_poll(self) -> bool:
-        """Disable polling."""
-        return False
+    def icon(self) -> str | None:
+        """Return the icon."""
+        if not self._static_info.icon:
+            return None
 
+        return cast(str, ICON_SCHEMA(self._static_info.icon))
 
-class EsphomeEntity(EsphomeBaseEntity):
-    """Define a generic esphome entity."""
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        """Return if the entity should be enabled when first added to the entity registry."""
+        return not self._static_info.disabled_by_default
 
-    async def async_added_to_hass(self) -> None:
-        """Register callbacks."""
-
-        await super().async_added_to_hass()
-
-        self.async_on_remove(
-            async_dispatcher_connect(
-                self.hass,
-                (
-                    f"esphome_{self._entry_id}"
-                    f"_update_{self._component_key}_{self._key}"
-                ),
-                self.async_write_ha_state,
-            )
-        )
+    @property
+    def entity_category(self) -> EntityCategory | None:
+        """Return the category of the entity, if any."""
+        if not self._static_info.entity_category:
+            return None
+        return ENTITY_CATEGORIES.from_esphome(self._static_info.entity_category)
